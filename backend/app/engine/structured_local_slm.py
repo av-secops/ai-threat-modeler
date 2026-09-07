@@ -45,7 +45,7 @@ class StructuredLocalSLM:
                 "error": self.error,
             }
         _, coverage = StrideCoverageEngine().assess(architecture, findings, generate_candidates=False)
-        unknown = [item for item in coverage["cells"] if item["status"] == "unknown"][:40]
+        unknown = [item for item in coverage["cells"] if item["status"] in {"unknown", "potential"}][:40]
         source = str((architecture.metadata or {}).get("architecture_text") or "")
         prompt = self._prompt(architecture, source, unknown)
         try:

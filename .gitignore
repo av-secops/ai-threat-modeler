@@ -13,6 +13,9 @@ node_modules
 dist
 dist-ssr
 *.local
+.env
+.env.*
+!.env.example
 coverage
 .pytest_cache/
 __pycache__/
@@ -49,3 +52,12 @@ test_output.txt
 # Virtual environments
 .venv/
 backend/.venv/
+
+# Fine-tuned checkpoints are reproducible from the governed dataset and are too
+# large for Git. Training manifests and evaluation reports remain tracked.
+backend/models/
+backend/checkpoints/
+
+# Local reviewer input and generated test/analysis output are not release content.
+backend/app/data/retrieval_feedback.jsonl
+backend/evaluation_reports/

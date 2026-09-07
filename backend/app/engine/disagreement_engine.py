@@ -90,8 +90,9 @@ class DisagreementEngine:
         )
         return {
             "version": self.VERSION,
-            "status": "review_required" if records else "clear",
-            "unresolved_count": len(records),
+            "status": "review_required" if high_confidence else "informational" if records else "clear",
+            "unresolved_count": high_confidence,
+            "informational_count": len(records) - high_confidence,
             "high_confidence_count": high_confidence,
             "items": records[:50],
             "authority_policy": (

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import re
+from threading import Lock
 from typing import Any, Dict, List, Tuple
 
 from .stride_coverage_engine import STRIDE_CATEGORIES
 from .local_challenger import LocalChallenger
 from .structured_local_slm import StructuredLocalSLM
+from .retrieval_quality import architecture_retrieval_requests
 
 
 class LocalIntelligence:
@@ -17,8 +19,17 @@ class LocalIntelligence:
         self.classifier = None
         self.initialization_errors: List[str] = []
         self.challenger = LocalChallenger()
-        self.structured_slm = StructuredLocalSLM()
-        self._initialize()
+        self.structured_slm = None
+        self._initialized = False
+        self._initialization_lock = Lock()
+
+    def _ensure_initialized(self) -> None:
+        with self._initialization_lock:
+            if self._initialized:
+                return
+            self._initialize()
+            self.structured_slm = StructuredLocalSLM()
+            self._initialized = True
 
     def _initialize(self) -> None:
         try:
@@ -42,11 +53,33 @@ class LocalIntelligence:
                 "stride_classifier": "disabled", "retrieved_candidates": 0,
             }
 
+        self._ensure_initialized()
         retrieved, retrieval_diagnostics = self._retrieve(architecture)
+        retrieved_by_id = {str(item.get("id")): item for item in retrieved}
         classified = 0
         conflicts = 0
         classifier_ready = bool(self.classifier and self.classifier.is_trained)
         for threat in threats:
+            normalized_id = re.sub(r"^KB-", "", str(threat.id or ""))
+            retrieved_rule = next(
+                (item for rule_id, item in retrieved_by_id.items()
+                 if normalized_id == rule_id or normalized_id.startswith(f"{rule_id}-")),
+                None,
+            )
+            if retrieved_rule:
+                threat.explanation = dict(threat.explanation or {})
+                threat.explanation["retrieval_provenance"] = {
+                    "rule_id": retrieved_rule.get("id"),
+                    "retrieval_score": retrieved_rule.get("retrieval_score"),
+                    "semantic_score": retrieved_rule.get("semantic_score"),
+                    "lexical_score": retrieved_rule.get("lexical_score"),
+                    "fusion_score": retrieved_rule.get("fusion_score"),
+                    "retrieval_sources": retrieved_rule.get("retrieval_sources") or {},
+                    "reranker_backend": retrieved_rule.get("reranker_backend"),
+                    "calibrated_threshold": retrieved_rule.get("calibrated_threshold"),
+                    "retrieved_for": retrieved_rule.get("retrieved_for") or [],
+                    "rule_provenance": retrieved_rule.get("rule_provenance"),
+                }
             text = f"{threat.title}. {threat.description}. {threat.root_cause or ''}"
             scores = {}
             predicted = "Unknown"
@@ -74,15 +107,19 @@ class LocalIntelligence:
         embedding_service = getattr(self.matcher, "_embedding_service", None) if self.matcher else None
         embedding_backend = getattr(embedding_service, "backend", "unavailable")
         full_embeddings = embedding_backend == "sentence_transformer"
-        status = "active" if full_embeddings and classifier_ready else "degraded"
+        retrieval_engine = self.matcher.diagnostics() if self.matcher else {}
+        reranker_status = retrieval_engine.get("reranker") or {}
+        reranker_ready = not reranker_status.get("model") or reranker_status.get("loaded") is True
+        status = "active" if full_embeddings and classifier_ready and reranker_ready else "degraded"
         if not self.matcher and not self.classifier:
             status = "unavailable"
         challenger = self.challenger.challenge(architecture, threats, retrieved)
         challenger["structured_slm"] = self.structured_slm.review(architecture, threats)
         diagnostics = {
             "status": status,
-            "semantic_retrieval": "active" if full_embeddings else "local_hashing" if embedding_service else "lexical_fallback",
+            "semantic_retrieval": "active" if full_embeddings else "hybrid_fallback" if self.matcher else "lexical_fallback",
             "embedding_backend": embedding_backend,
+            "retrieval_engine": retrieval_engine,
             "stride_classifier": "active" if classifier_ready else "advisory_zero_shot" if self.matcher else "unavailable",
             "retrieved_candidates": len(retrieved),
             "candidate_threat_ids": [item["id"] for item in retrieved[:50]],
@@ -99,94 +136,69 @@ class LocalIntelligence:
 
     def _retrieve(self, architecture) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         candidates: Dict[str, Dict[str, Any]] = {}
-        queries = 0
         retrieved_by_element: Dict[str, Dict[str, int]] = {}
-        for component in architecture.components or []:
-            query = " ".join(filter(None, [
-                component.name, component.type,
-                str((component.properties or {}).get("db_type") or ""),
-                str((component.properties or {}).get("cloud_provider") or ""),
-                str((component.properties or {}).get("data_sensitivity") or ""),
-            ]))
-            retrieved_by_element[component.id] = {}
-            cloud = str((component.properties or {}).get("cloud_provider") or "") or None
-            for category in STRIDE_CATEGORIES:
-                queries += 1
-                results = []
-                if self.matcher:
-                    try:
-                        results = self.matcher.find_relevant_threats(
-                            query,
-                            component.type,
-                            top_k=5,
-                            stride_category=category,
-                            cloud_provider=cloud,
-                        )
-                    except Exception:
-                        results = []
-                if not results:
-                    results = [
-                        ({"original": item}, score)
-                        for item, score in self._lexical_candidates(query, component.type, category)
-                    ]
-                accepted = 0
-                for metadata, score in results:
-                    original = metadata.get("original") or metadata
-                    if score < 0.3:
-                        continue
-                    item = dict(original)
-                    item["retrieval_score"] = max(float(score), candidates.get(item["id"], {}).get("retrieval_score", 0))
-                    item["semantic_score"] = metadata.get("semantic_score")
-                    item["reranker_score"] = metadata.get("reranker_score")
-                    item["reranker_backend"] = metadata.get("reranker_backend")
-                    item["hard_negative_reasons"] = metadata.get("hard_negative_reasons") or []
-                    item["retrieved_for"] = sorted(set([
-                        *(candidates.get(item["id"], {}).get("retrieved_for") or []),
-                        f"{component.id}:{category}",
-                    ]))
-                    candidates[item["id"]] = item
-                    accepted += 1
-                retrieved_by_element[component.id][category] = accepted
+        requests = architecture_retrieval_requests(architecture, STRIDE_CATEGORIES)
+        payloads = [request.__dict__ for request in requests]
+        batches = [[] for _ in requests]
+        if self.matcher:
+            try:
+                batches = self.matcher.find_relevant_threats_batch(payloads)
+            except Exception as exc:
+                self.initialization_errors.append(f"batch retrieval: {exc}")
 
-        # Flows are first-class retrieval scopes because authentication,
-        # integrity and confidentiality rules often apply to an interaction,
-        # not either endpoint in isolation.
-        component_map = {component.id: component for component in architecture.components or []}
-        for flow in architecture.flows or []:
-            flow_id = f"flow:{flow.source_id}->{flow.target_id}"
-            source = component_map.get(flow.source_id)
-            target = component_map.get(flow.target_id)
-            query = f"{source.name if source else flow.source_id} to {target.name if target else flow.target_id} {flow.protocol} {flow.data_type} data flow"
-            retrieved_by_element[flow_id] = {}
-            for category in STRIDE_CATEGORIES:
-                queries += 1
-                results = []
-                if self.matcher:
-                    try:
-                        results = self.matcher.find_relevant_threats(
-                            query, "Data Flow", top_k=3, stride_category=category,
-                        )
-                    except Exception:
-                        results = []
-                accepted = 0
-                for metadata, score in results:
-                    original = metadata.get("original") or metadata
-                    if score < 0.3:
-                        continue
-                    item = dict(original)
-                    item["retrieval_score"] = max(float(score), candidates.get(item["id"], {}).get("retrieval_score", 0))
-                    item["retrieved_for"] = sorted(set([
-                        *(candidates.get(item["id"], {}).get("retrieved_for") or []),
-                        f"{flow_id}:{category}",
-                    ]))
-                    candidates[item["id"]] = item
-                    accepted += 1
-                retrieved_by_element[flow_id][category] = accepted
+        for request, results in zip(requests, batches):
+            element_id = (
+                request.scope.get("component_id")
+                if request.scope.get("kind") == "component"
+                else f"flow:{request.scope.get('source_id')}->{request.scope.get('target_id')}"
+            )
+            retrieved_by_element.setdefault(element_id, {category: 0 for category in STRIDE_CATEGORIES})
+            if not results:
+                results = [
+                    ({"original": item}, score)
+                    for item, score in self._lexical_candidates(
+                        request.query, request.component_type or "Any", None,
+                    )
+                ]
+            accepted = 0
+            for metadata, score in results:
+                original = metadata.get("original") or metadata
+                threshold = float(metadata.get("calibrated_threshold") or 0.3)
+                if score < threshold:
+                    continue
+                item = dict(original)
+                previous = candidates.get(item["id"], {})
+                item["retrieval_score"] = max(float(score), previous.get("retrieval_score", 0))
+                for field in (
+                    "semantic_score", "lexical_score", "fusion_score", "fusion_weights",
+                    "retrieval_sources", "reranker_score", "reranker_backend",
+                    "hard_negative_reasons", "rule_provenance", "calibrated_threshold",
+                    "document_chunk",
+                ):
+                    item[field] = metadata.get(field)
+                item_category = item.get("stride_category") or item.get("category") or "Unknown"
+                scope_key = f"{request.request_id}:{item_category}"
+                item["retrieved_for"] = sorted(set([
+                    *(previous.get("retrieved_for") or []), scope_key,
+                ]))
+                item["retrieval_scores_by_scope"] = {
+                    **(previous.get("retrieval_scores_by_scope") or {}),
+                    scope_key: max(
+                        float(score),
+                        float((previous.get("retrieval_scores_by_scope") or {}).get(scope_key, 0)),
+                    ),
+                }
+                item["retrieval_scope"] = request.scope
+                candidates[item["id"]] = item
+                accepted += 1
+                if item_category in retrieved_by_element[element_id]:
+                    retrieved_by_element[element_id][item_category] += 1
 
         ranked = sorted(candidates.values(), key=lambda item: item.get("retrieval_score", 0), reverse=True)
         diagnostics = {
-            "retrieval_strategy": "per-element-per-STRIDE hybrid retrieval with metadata filters",
-            "retrieval_queries": queries,
+            "retrieval_strategy": "structured graph-aware per-element STRIDE retrieval with domain indexes, BM25, dense vectors, RRF, calibration, and batch reranking",
+            "retrieval_queries": len(requests),
+            "retrieval_query_batches": 1 if requests else 0,
             "retrieval_by_element": retrieved_by_element,
         }
         return ranked, diagnostics

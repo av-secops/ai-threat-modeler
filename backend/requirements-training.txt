@@ -1,7 +1,6 @@
-# Optional GPU-only QLoRA training dependencies.
+# Optional Aegis Threat 2.3.1 GPU QLoRA training dependencies.
+# Use a separate GPU environment. Embedding training dependencies are in requirements.txt.
 -r requirements.txt
-accelerate>=1.2.0,<2.0.0
 bitsandbytes>=0.45.0,<1.0.0
-datasets>=3.2.0,<4.0.0
 peft>=0.14.0,<1.0.0
 trl>=0.13.0,<1.0.0

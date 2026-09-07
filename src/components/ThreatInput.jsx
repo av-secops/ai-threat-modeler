@@ -221,7 +221,7 @@ const ThreatInput = ({ onAnalyze, isAnalyzing }) => {
                                 <input
                                     type="file"
                                     multiple
-                                    accept=".txt,.md,.markdown,.rst,.pdf,.docx,.json,.yaml,.yml,.csv"
+                                    accept=".txt,.md,.markdown,.rst,.pdf,.docx,.json,.yaml,.yml,.tf,.hcl,.csv"
                                     className="hidden"
                                     onChange={handleFileUpload}
                                     disabled={isAnalyzing}
@@ -244,7 +244,8 @@ const ThreatInput = ({ onAnalyze, isAnalyzing }) => {
                     </div>
                     <textarea
                         className="input-brand h-56 w-full resize-none font-mono text-sm leading-relaxed"
-                        placeholder="// Optional: add extra context, assumptions, or questions for the uploaded design documents... (Ctrl+Enter to submit)"
+                        aria-label="Architecture description"
+                        placeholder="Describe the system, its users, data and important workflows."
                         value={description}
                         onChange={(e) => setDescription(e.target.value)}
                         onKeyDown={handleKeyDown}
@@ -278,11 +279,11 @@ const ThreatInput = ({ onAnalyze, isAnalyzing }) => {
                             className="btn-brand gap-2"
                         >
                             {isAnalyzing ? (
-                                <>Analyzing...</>
+                                <>Preparing model...</>
                             ) : (
                                 <>
                                     <Send className="w-4 h-4" />
-                                    Analyze Design
+                                    Review architecture
                                 </>
                             )}
                         </button>

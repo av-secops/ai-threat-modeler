@@ -1,0 +1,278 @@
+{
+  "corpus": "training/retrieval/security_retrieval_eval.json",
+  "promotion_gate": {
+    "hard_negative_outrank_rate": "== 0",
+    "mean_reciprocal_rank": ">= 0.90",
+    "real_embedding_required": true,
+    "recall_at_k": ">= 0.98"
+  },
+  "recommended_model": "C:\\Users\\Ankit\\Documents\\codex\\ai-threat-modeler\\backend\\models\\aegis-bge-security-v1",
+  "reports": [
+    {
+      "availability": "available",
+      "diagnostics": {
+        "cache": "incremental:0_changed",
+        "calibration": {
+          "default_threshold": 0.3,
+          "thresholds": {},
+          "version": "retrieval-calibration-1.0"
+        },
+        "dense_vectors": 181,
+        "embedding_backend": "sentence_transformer",
+        "embedding_dimension": 768,
+        "embedding_model": "BAAI/bge-base-en-v1.5",
+        "fusion_weights": {
+          "bm25": 0.38,
+          "dense": 0.62
+        },
+        "lexical_documents": 181,
+        "monitoring": {
+          "cache:incremental:0_changed": 543,
+          "fallback_queries": 0,
+          "fallback_rate": 0.0,
+          "latency_ms": {
+            "max": 133.45,
+            "p50": 13.75,
+            "p95": 18.4
+          },
+          "queries": 543,
+          "results": 3521,
+          "version": "retrieval-monitor-1.0"
+        },
+        "profile": "balanced",
+        "query_instruction": true,
+        "reranker": {
+          "backend": "security_feature_reranker",
+          "error": null,
+          "loaded": false,
+          "model": null
+        },
+        "schema": "hybrid-bm25-rrf-rerank-4.0",
+        "status": "active",
+        "strategy": "BM25 + dense embeddings + reciprocal-rank fusion + reranking"
+      },
+      "failed_scenarios": [],
+      "metrics": {
+        "hard_negative_leakage_rate": 0.5218,
+        "hard_negative_outrank_rate": 0.0,
+        "mean_ndcg_at_k": 1.0,
+        "mean_reciprocal_rank": 1.0,
+        "precision_at_k": 0.1,
+        "recall_at_k": 1.0
+      },
+      "model": "BAAI/bge-base-en-v1.5",
+      "name": "bge-base",
+      "promotion_eligible": true,
+      "seconds": 8.1
+    },
+    {
+      "availability": "available",
+      "diagnostics": {
+        "cache": "incremental:0_changed",
+        "calibration": {
+          "default_threshold": 0.3,
+          "thresholds": {},
+          "version": "retrieval-calibration-1.0"
+        },
+        "dense_vectors": 181,
+        "embedding_backend": "sentence_transformer",
+        "embedding_dimension": 768,
+        "embedding_model": "C:\\Users\\Ankit\\Documents\\codex\\ai-threat-modeler\\backend\\models\\aegis-bge-security-v1",
+        "fusion_weights": {
+          "bm25": 0.38,
+          "dense": 0.62
+        },
+        "lexical_documents": 181,
+        "monitoring": {
+          "cache:incremental:0_changed": 1086,
+          "fallback_queries": 0,
+          "fallback_rate": 0.0,
+          "latency_ms": {
+            "max": 133.45,
+            "p50": 13.82,
+            "p95": 18.58
+          },
+          "queries": 1086,
+          "results": 6987,
+          "version": "retrieval-monitor-1.0"
+        },
+        "profile": "balanced",
+        "query_instruction": true,
+        "reranker": {
+          "backend": "security_feature_reranker",
+          "error": null,
+          "loaded": false,
+          "model": null
+        },
+        "schema": "hybrid-bm25-rrf-rerank-4.0",
+        "status": "active",
+        "strategy": "BM25 + dense embeddings + reciprocal-rank fusion + reranking"
+      },
+      "failed_scenarios": [],
+      "metrics": {
+        "hard_negative_leakage_rate": 0.5169,
+        "hard_negative_outrank_rate": 0.0,
+        "mean_ndcg_at_k": 1.0,
+        "mean_reciprocal_rank": 1.0,
+        "precision_at_k": 0.1,
+        "recall_at_k": 1.0
+      },
+      "model": "C:\\Users\\Ankit\\Documents\\codex\\ai-threat-modeler\\backend\\models\\aegis-bge-security-v1",
+      "name": "aegis-security",
+      "promotion_eligible": true,
+      "seconds": 8.02
+    },
+    {
+      "availability": "unavailable",
+      "diagnostics": {
+        "cache": "not_built",
+        "calibration": {
+          "default_threshold": 0.3,
+          "thresholds": {},
+          "version": "retrieval-calibration-1.0"
+        },
+        "dense_vectors": 0,
+        "embedding_backend": "local_hashing",
+        "embedding_dimension": 128,
+        "embedding_model": "BAAI/bge-large-en-v1.5",
+        "fusion_weights": {
+          "bm25": 0.75,
+          "dense": 0.25
+        },
+        "lexical_documents": 0,
+        "monitoring": {
+          "cache:incremental:0_changed": 1086,
+          "fallback_queries": 0,
+          "fallback_rate": 0.0,
+          "latency_ms": {
+            "max": 133.45,
+            "p50": 13.82,
+            "p95": 18.58
+          },
+          "queries": 1086,
+          "results": 6987,
+          "version": "retrieval-monitor-1.0"
+        },
+        "profile": "balanced",
+        "query_instruction": true,
+        "reranker": {
+          "backend": "security_feature_reranker",
+          "error": null,
+          "loaded": false,
+          "model": null
+        },
+        "schema": "hybrid-bm25-rrf-rerank-4.0",
+        "status": "not_ready",
+        "strategy": "BM25 + dense embeddings + reciprocal-rank fusion + reranking"
+      },
+      "failed_scenarios": [],
+      "metrics": null,
+      "model": "BAAI/bge-large-en-v1.5",
+      "name": "bge-large",
+      "promotion_eligible": false,
+      "seconds": 0.0
+    },
+    {
+      "availability": "unavailable",
+      "diagnostics": {
+        "cache": "not_built",
+        "calibration": {
+          "default_threshold": 0.3,
+          "thresholds": {},
+          "version": "retrieval-calibration-1.0"
+        },
+        "dense_vectors": 0,
+        "embedding_backend": "local_hashing",
+        "embedding_dimension": 128,
+        "embedding_model": "all-mpnet-base-v2",
+        "fusion_weights": {
+          "bm25": 0.75,
+          "dense": 0.25
+        },
+        "lexical_documents": 0,
+        "monitoring": {
+          "cache:incremental:0_changed": 1086,
+          "fallback_queries": 0,
+          "fallback_rate": 0.0,
+          "latency_ms": {
+            "max": 133.45,
+            "p50": 13.82,
+            "p95": 18.58
+          },
+          "queries": 1086,
+          "results": 6987,
+          "version": "retrieval-monitor-1.0"
+        },
+        "profile": "balanced",
+        "query_instruction": false,
+        "reranker": {
+          "backend": "security_feature_reranker",
+          "error": null,
+          "loaded": false,
+          "model": null
+        },
+        "schema": "hybrid-bm25-rrf-rerank-4.0",
+        "status": "not_ready",
+        "strategy": "BM25 + dense embeddings + reciprocal-rank fusion + reranking"
+      },
+      "failed_scenarios": [],
+      "metrics": null,
+      "model": "all-mpnet-base-v2",
+      "name": "mpnet",
+      "promotion_eligible": false,
+      "seconds": 0.0
+    },
+    {
+      "availability": "unavailable",
+      "diagnostics": {
+        "cache": "not_built",
+        "calibration": {
+          "default_threshold": 0.3,
+          "thresholds": {},
+          "version": "retrieval-calibration-1.0"
+        },
+        "dense_vectors": 0,
+        "embedding_backend": "local_hashing",
+        "embedding_dimension": 128,
+        "embedding_model": "nomic-ai/nomic-embed-text-v1.5",
+        "fusion_weights": {
+          "bm25": 0.75,
+          "dense": 0.25
+        },
+        "lexical_documents": 0,
+        "monitoring": {
+          "cache:incremental:0_changed": 1086,
+          "fallback_queries": 0,
+          "fallback_rate": 0.0,
+          "latency_ms": {
+            "max": 133.45,
+            "p50": 13.82,
+            "p95": 18.58
+          },
+          "queries": 1086,
+          "results": 6987,
+          "version": "retrieval-monitor-1.0"
+        },
+        "profile": "balanced",
+        "query_instruction": false,
+        "reranker": {
+          "backend": "security_feature_reranker",
+          "error": null,
+          "loaded": false,
+          "model": null
+        },
+        "schema": "hybrid-bm25-rrf-rerank-4.0",
+        "status": "not_ready",
+        "strategy": "BM25 + dense embeddings + reciprocal-rank fusion + reranking"
+      },
+      "failed_scenarios": [],
+      "metrics": null,
+      "model": "nomic-ai/nomic-embed-text-v1.5",
+      "name": "nomic",
+      "promotion_eligible": false,
+      "seconds": 0.0
+    }
+  ],
+  "scenarios": 543,
+  "schema_version": "retrieval-model-comparison-1.0"
+}

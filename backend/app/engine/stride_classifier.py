@@ -154,11 +154,16 @@ class StrideClassifier:
         return self._accuracy
     
     def _get_embedding_service(self):
-        """Lazy-load embedding service."""
+        """Lazy-load the classifier's stable, retrieval-independent embeddings."""
         if self._embedding_service is None:
             try:
-                from .embedding_service import get_embedding_service
-                self._embedding_service = get_embedding_service()
+                from .embedding_service import EmbeddingService
+                classifier_model = os.getenv(
+                    "AEGIS_THREAT_CLASSIFIER_EMBEDDING_MODEL", "all-MiniLM-L6-v2",
+                ).strip() or "all-MiniLM-L6-v2"
+                self._embedding_service = EmbeddingService(
+                    classifier_model, role="stride_classifier_embeddings",
+                )
             except Exception as e:
                 logger.warning(f"Could not load embedding service: {e}")
         return self._embedding_service

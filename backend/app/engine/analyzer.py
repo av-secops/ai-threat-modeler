@@ -3,7 +3,9 @@ import json
 import logging
 import re
 from collections import OrderedDict
+from copy import deepcopy
 from datetime import datetime
+from threading import RLock
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .analysis_gaps import detect_missing_elements
@@ -31,6 +33,8 @@ from .reporter import ReportGenerator
 from .risk_scoring import calculate_risk, score_for
 from . import source_index
 from .confidence_calibration import ConfidenceCalibrator
+from .retrieval_quality import audit_knowledge_rules, rule_provenance
+from ..knowledge_base.frameworks import resolve_mappings
 from .stride_coverage_engine import StrideCoverageEngine
 from .specialist_router import SpecialistRouter
 from .specialist_orchestrator import SpecialistOrchestrator
@@ -121,23 +125,24 @@ class ThreatAnalyzer:
         self.local_intelligence = LocalIntelligence(self.knowledge_base)
         self.confidence_calibrator = ConfidenceCalibrator()
         self.disagreement_engine = DisagreementEngine()
+        self.knowledge_quality_audit = audit_knowledge_rules(self.knowledge_base.get_all_threats())
+        self._cache_lock = RLock()
         self._parsed_arch_cache: OrderedDict[str, SystemArchitecture] = OrderedDict()
         self._graph_cache: OrderedDict[str, object] = OrderedDict()
-        self._report_cache: OrderedDict[str, str] = OrderedDict()
 
-    @staticmethod
-    def _cache_get(cache: OrderedDict, key: str):
-        if key in cache:
-            cache.move_to_end(key)
-            return cache[key]
+    def _cache_get(self, cache: OrderedDict, key: str):
+        with self._cache_lock:
+            if key in cache:
+                cache.move_to_end(key)
+                return cache[key]
         return None
 
-    @staticmethod
-    def _cache_set(cache: OrderedDict, key: str, value, max_size: int):
-        cache[key] = value
-        cache.move_to_end(key)
-        while len(cache) > max_size:
-            cache.popitem(last=False)
+    def _cache_set(self, cache: OrderedDict, key: str, value, max_size: int):
+        with self._cache_lock:
+            cache[key] = value
+            cache.move_to_end(key)
+            while len(cache) > max_size:
+                cache.popitem(last=False)
 
     @staticmethod
     def _stable_hash(payload) -> str:
@@ -158,26 +163,18 @@ class ThreatAnalyzer:
         return graph
 
     def _generate_report_markdown(self, result: AnalysisResult) -> str:
-        cache_key = self._stable_hash({
-            "project_name": result.project_name,
-            "architecture": self._architecture_signature(result.architecture),
-            "threats": [threat.id for threat in result.threats],
-            "score": result.score,
-        })
-        cached = self._cache_get(self._report_cache, cache_key)
-        if cached is not None:
-            return cached
-        report = ReportGenerator.generate_markdown(result)
-        self._cache_set(self._report_cache, cache_key, report, max_size=32)
-        return report
+        # Rendering is cheap; IDs and scores cannot key changing evidence,
+        # remediations, review decisions, and publication status correctly.
+        return ReportGenerator.generate_markdown(result)
 
     def reload_local_intelligence(self) -> Dict[str, object]:
-        from .embedding_service import reset_vector_store
+        from .embedding_service import reset_embedding_service, reset_vector_store
         from .semantic_matcher import reset_semantic_matcher
         from .stride_classifier import reset_stride_classifier
 
         reset_semantic_matcher()
         reset_vector_store()
+        reset_embedding_service()
         reset_stride_classifier()
         self.knowledge_base = reload_knowledge_base()
         self.contextual_engine = ContextualThreatEngine(self.knowledge_base)
@@ -186,9 +183,10 @@ class ThreatAnalyzer:
         self.local_intelligence = LocalIntelligence(self.knowledge_base)
         self.confidence_calibrator = ConfidenceCalibrator()
         self.disagreement_engine = DisagreementEngine()
-        self._parsed_arch_cache.clear()
-        self._graph_cache.clear()
-        self._report_cache.clear()
+        self.knowledge_quality_audit = audit_knowledge_rules(self.knowledge_base.get_all_threats())
+        with self._cache_lock:
+            self._parsed_arch_cache.clear()
+            self._graph_cache.clear()
         return {
             "knowledge_base_threats": len(self.knowledge_base.get_all_threats()),
             "cached_architectures_cleared": True,
@@ -226,15 +224,17 @@ class ThreatAnalyzer:
         reporter.phase("parsing")
         cache_key = self._stable_hash({"description": description, "source_documents": source_documents or []})
         system_architecture = self._cache_get(self._parsed_arch_cache, cache_key)
+        parse_cache_hit = system_architecture is not None
         if system_architecture is None:
             parser = ArchitectureParser()
             system_architecture = parser.parse(description)
             if source_documents:
                 metadata = system_architecture.metadata or {}
-                metadata["source_documents"] = source_documents
+                metadata["source_documents"] = deepcopy(source_documents)
                 system_architecture.metadata = metadata
             self._cache_set(self._parsed_arch_cache, cache_key, system_architecture, max_size=32)
-        return self.analyze(
+        parsing_performance = reporter.finish()
+        result = self.analyze(
             system_architecture,
             project_name,
             use_local_slm=use_local_slm,
@@ -242,6 +242,11 @@ class ThreatAnalyzer:
             domain_profile=domain_profile,
             progress=progress,
         )
+        performance = result.engine_status["performance"]
+        performance["phase_ms"] = {**parsing_performance["phase_ms"], **performance["phase_ms"]}
+        performance["total_ms"] = round(performance["total_ms"] + parsing_performance["total_ms"], 3)
+        performance["parse_cache_hit"] = parse_cache_hit
+        return result
 
     def analyze(
         self,
@@ -255,6 +260,9 @@ class ThreatAnalyzer:
         reporter = ProgressReporter(progress)
         analysis_flags = self._analysis_flags(analysis_mode, use_local_slm)
         reporter.phase("canonical_model")
+        # Engines enrich their working model. Neither callers nor the parse
+        # cache should acquire those mutations or share them across requests.
+        architecture = architecture.model_copy(deep=True)
         architecture, architecture_validation = canonicalize_architecture(architecture)
         graph = self._get_cached_graph(architecture)
 
@@ -355,6 +363,8 @@ class ThreatAnalyzer:
                     item.rule_kind == "candidate" for item in self.knowledge_base.get_typed_rules()
                 ),
                 "validation_issues": len(self.knowledge_base.validation_issues),
+                "validation_issue_details": self.knowledge_base.validation_issues[:50],
+                "quality_audit": self.knowledge_quality_audit,
                 **kb_diagnostics,
             },
             "specialist_router": specialist_route,
@@ -376,11 +386,17 @@ class ThreatAnalyzer:
             },
             "quality_gate": self._runtime_quality_gate(
                 architecture_validation, threats, stride_coverage, local_diagnostics,
-                disagreement_diagnostics, architecture,
+                disagreement_diagnostics, architecture, attack_paths,
             ),
         }
         result.finding_groups = group_findings(threats)
         result.risk_methodology = risk_methodology()
+        result.risk_methodology["score_breakdown"] = {
+            **self._score_breakdown(threats),
+            "determined_control_ratio": (result.engine_status or {}).get("quality_gate", {}).get(
+                "determined_control_ratio", 0.0
+            ),
+        }
         result.architecture_insights = architecture_insights
         result.ml_enhanced = {
             "analysis_mode": analysis_flags["mode"],
@@ -402,12 +418,13 @@ class ThreatAnalyzer:
         result.ai_security_lens = self._build_ai_security_lens(architecture, threats)
         result.priority_actions = self._build_priority_actions(threats)
         result.report_markdown = self._generate_report_markdown(result)
+        result.engine_status["performance"] = reporter.finish()
         return result
 
     # Extraction states that mean the whole document reached the model. Anything
     # else left content behind: an image-only PDF page, or an embedded diagram.
     _COMPLETE_EXTRACTION = frozenset({
-        "text_complete", "structured_complete", "structured_text_complete",
+        "text_complete", "semantic_text_complete", "structured_complete", "structured_text_complete",
     })
 
     @staticmethod
@@ -467,6 +484,7 @@ class ThreatAnalyzer:
         local_diagnostics: Optional[Dict[str, Any]] = None,
         disagreement_diagnostics: Optional[Dict[str, Any]] = None,
         architecture: Optional[SystemArchitecture] = None,
+        attack_paths: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """Decide whether this report can be published as it stands.
 
@@ -486,7 +504,11 @@ class ThreatAnalyzer:
         )
         unmapped = sum(not scoped(threat) for threat in threats)
         def declared(threat: Threat) -> bool:
-            return (threat.explanation or {}).get("origin") == "declared_known_issue"
+            explanation = threat.explanation or {}
+            return (
+                explanation.get("origin") == "declared_known_issue"
+                or explanation.get("scope_resolution") == "unresolved_explicit_statement"
+            )
 
         # An issue the input states but the model cannot place is still worth
         # reporting. Dropping it would lose the user's own evidence, and blocking
@@ -519,6 +541,16 @@ class ThreatAnalyzer:
             (threat.explanation or {}).get("origin") == "declared_known_issue" for threat in threats
         )
         dropped_known_issues = max(0, declared_known_issues - modeled_known_issues)
+        invalid_attack_paths = sum(
+            not path.get("entry_point")
+            or not (path.get("target") or path.get("target_component_id"))
+            or not path.get("hops")
+            or any(
+                not hop.get("source") or not hop.get("target") or not hop.get("evidence_status")
+                for hop in path.get("hops") or []
+            )
+            for path in attack_paths or []
+        )
 
         integrity_violations = [
             check for check in (
@@ -530,6 +562,8 @@ class ThreatAnalyzer:
                  "A confirmed finding names no affected element."),
                 ("declared_known_issue_not_reported", dropped_known_issues,
                  "An issue stated in the input is missing from the findings."),
+                ("invalid_attack_paths", invalid_attack_paths,
+                 "An attack path lacks an entry, target, or evidence-backed graph hop."),
             ) if check[1]
         ]
         completeness_warnings = [
@@ -546,6 +580,8 @@ class ThreatAnalyzer:
                  "A potential finding names no affected element."),
                 ("unresolved_engine_disagreements", unresolved_disagreements,
                  "Engines disagree and the conflict is unresolved."),
+                ("low_determined_control_coverage", 1 if applicable_cells and determined_ratio < 0.5 else 0,
+                 "Fewer than half of applicable control states are determined from evidence."),
                 # A diagram that was uploaded as an image contributes nothing to
                 # the model. Reporting "ready" over an unread page would present
                 # a model of part of the design as a model of the design.
@@ -579,48 +615,53 @@ class ThreatAnalyzer:
             "unscoped_declared_issues": unscoped_declared,
             "declared_known_issues": declared_known_issues,
             "reported_known_issues": modeled_known_issues,
+            "invalid_attack_paths": invalid_attack_paths,
             "unknown_stride_cells": unknown_cells,
             "applicable_stride_cells": applicable_cells,
-            # An unknown control state is the expected result of modelling from a
-            # description and is what the potential findings and review questions
-            # are made of, so it is reported as coverage rather than as a defect.
+            # Unknown control state is expected in prose models, but very low
+            # determination means the report needs reviewer validation.
             "determined_control_ratio": determined_ratio,
             "unresolved_engine_disagreements": unresolved_disagreements,
             "unread_document_content": unread_documents,
             "policy": (
                 "Publication is blocked only where the report would contradict itself: an "
                 "invalid topology, a confirmed finding without evidence or scope, or an issue "
-                "stated in the input that no finding reports. Extraction gaps, an issue that "
+                "stated in the input that no finding reports. Invalid attack paths also block "
+                "publication. Extraction gaps, an issue that "
                 "could not be placed on an element, and unresolved engine disagreements mark "
-                "the report for review. Unknown control states are reported as coverage and do "
-                "not by themselves hold back the report."
+                "the report for review. Fewer than half of applicable controls determined from "
+                "evidence also requires review; unknown states remain visible as questions."
             ),
         }
 
     @staticmethod
     def _suppress_potentials_superseded_by_known_issues(threats: List[Threat]) -> List[Threat]:
-        """Do not repeat an explicit source weakness as a generic question."""
-        confirmed_pairs = set()
+        """Suppress only a question about the same control and complete scope."""
+        def scope(threat):
+            components = set(threat.affected_components or [])
+            components.update(filter(None, [threat.component, threat.affected_component]))
+            flows = set(threat.affected_data_flows or [])
+            flows.update(filter(None, [threat.data_flow, threat.related_data_flow]))
+            return frozenset(components), frozenset(flows)
+
+        confirmed_claims = []
         for threat in threats:
             source_refs = {
                 str(item.get("source_ref") or "") for item in (threat.evidence_details or [])
             }
             if threat.tier != "Confirmed" or not any(re.fullmatch(r"K\d+", ref) for ref in source_refs):
                 continue
-            category = threat.stride_category or threat.category
-            component_ids = set(threat.affected_components or [])
-            if threat.affected_component:
-                component_ids.add(threat.affected_component)
-            confirmed_pairs.update((component_id, category) for component_id in component_ids if component_id)
+            controls = set((threat.explanation or {}).get("matched_controls") or [])
+            if controls:
+                confirmed_claims.append((scope(threat), controls, threat.stride_category or threat.category))
 
         filtered = []
         for threat in threats:
             category = threat.stride_category or threat.category
-            component_ids = set(threat.affected_components or [])
-            if threat.affected_component:
-                component_ids.add(threat.affected_component)
-            superseded = threat.tier == "Potential" and any(
-                (component_id, category) in confirmed_pairs for component_id in component_ids
+            controls = set((threat.explanation or {}).get("matched_controls") or [])
+            superseded = threat.tier == "Potential" and bool(controls) and any(
+                scope(threat) == known_scope and category == known_category and controls <= known_controls
+                for known_scope, known_controls, known_category in confirmed_claims
             )
             if not superseded:
                 filtered.append(threat)
@@ -631,7 +672,7 @@ class ThreatAnalyzer:
     #: a contextual pattern describes the same absence in general terms; the
     #: taxonomy restates the analyst's own sentence. Where several describe one
     #: control on one component, the reviewer should read the most specific.
-    _CONTROL_FINDING_PRECEDENCE = ("GENERIC-", "CTX-", "KB-")
+    _CONTROL_FINDING_PRECEDENCE = ("GENERIC-", "CTX-", "KB-", "IAC-", "CODE-")
 
     @classmethod
     def _collapse_findings_on_the_same_control(cls, threats: List[Threat]) -> List[Threat]:
@@ -643,7 +684,11 @@ class ThreatAnalyzer:
         problem, so the most specific is kept and the others' framework mappings
         and evidence are folded into it.
         """
-        def authority(threat: Threat) -> int:
+        def authority(threat: Threat) -> float:
+            if (threat.explanation or {}).get('origin') == 'declared_known_issue':
+                # Preserve the owner's stable issue identifier when correlation
+                # also enables a KB predicate for the same control and scope.
+                return 3.5
             for rank, prefix in enumerate(cls._CONTROL_FINDING_PRECEDENCE, start=1):
                 if str(threat.id or "").startswith(prefix):
                     return rank
@@ -658,6 +703,20 @@ class ThreatAnalyzer:
             for control in controls:
                 if component:
                     claims.setdefault((component, control), []).append(threat)
+
+        signature_claims: Dict[Tuple[str, str, str], List[Threat]] = {}
+        for threat in threats:
+            if threat.tier != "Confirmed":
+                continue
+            component = threat.component or threat.affected_component
+            signature = cls._root_signature(threat)
+            if component and signature:
+                signature_claims.setdefault((
+                    component, threat.stride_category or threat.category, signature,
+                ), []).append(threat)
+        for (component, _, signature), duplicates in signature_claims.items():
+            if len(duplicates) > 1:
+                claims[(component, f"root:{signature}")] = duplicates
 
         superseded: Dict[int, Threat] = {}
         for duplicates in claims.values():
@@ -677,7 +736,30 @@ class ThreatAnalyzer:
             keeper.mitre_attack = _merge(keeper.mitre_attack, threat.mitre_attack)
             keeper.nist_800_53 = _merge(keeper.nist_800_53, threat.nist_800_53)
             keeper.evidence = _merge(keeper.evidence, threat.evidence)
+            keeper.evidence_details = _merge(keeper.evidence_details, threat.evidence_details)
+            keeper.explanation = {
+                **(threat.explanation or {}),
+                **(keeper.explanation or {}),
+                "merged_finding_ids": _merge(
+                    (keeper.explanation or {}).get("merged_finding_ids") or [keeper.id],
+                    (threat.explanation or {}).get("merged_finding_ids") or [threat.id],
+                ),
+            }
         return [threat for threat in threats if id(threat) not in superseded]
+
+    @staticmethod
+    def _root_signature(threat: Threat) -> str:
+        stop = {
+            "a", "an", "as", "at", "configured", "configuration", "container",
+            "for", "is", "kubernetes", "missing", "not", "requires", "running",
+            "runs", "run", "the", "to", "validation", "workload",
+        }
+        tokens = {
+            token[:-1] if token.endswith("s") and len(token) > 4 else token
+            for token in re.findall(r"[a-z0-9]+", str(threat.title or "").lower())
+            if token not in stop and len(token) > 2
+        }
+        return " ".join(sorted(tokens)) if 0 < len(tokens) <= 6 else ""
 
     def refresh_result_artifacts(
         self,
@@ -693,18 +775,24 @@ class ThreatAnalyzer:
         threats = self._ensure_architecture_links(threats, architecture)
         threats = normalize_finding_output(threats, architecture)
         threats = self._apply_risk_model(threats, architecture)
-        threats = self._classify_tiers(threats)
-        threats = self._suppress_potentials_superseded_by_known_issues(threats)
-        threats = self._collapse_findings_on_the_same_control(threats)
         threats, local_diagnostics = self.local_intelligence.enrich(
             architecture, threats, enabled=analysis_flags["local_intelligence"],
         )
         disagreement_diagnostics = self.disagreement_engine.assess(threats, local_diagnostics)
         threats, confidence_diagnostics = self.confidence_calibrator.calibrate(threats, architecture)
         threats = self._apply_risk_model(threats, architecture)
+        threats = self._classify_tiers(threats)
+        threats = self._suppress_potentials_superseded_by_known_issues(threats)
+        threats = self._collapse_findings_on_the_same_control(threats)
         _, stride_coverage = self.stride_coverage_engine.assess(
             architecture, threats, generate_candidates=False,
         )
+        attack_paths = generate_attack_paths(architecture, threats)
+        threats = self._attach_attack_paths(threats, attack_paths)
+        result.attack_chains = {"paths": attack_paths, "count": len(attack_paths)}
+        graph = self._get_cached_graph(architecture)
+        result.mermaid_diagram = generate_mermaid(graph, threats=threats, enhanced=True)
+        result.diagram = result.mermaid_diagram
         threats = self._enrich_threat_explanations(threats, architecture)
         threats = self._cite_evidence_sources(threats, architecture)
         result.threats = threats
@@ -734,6 +822,7 @@ class ThreatAnalyzer:
         result.stride_coverage = stride_coverage
         result.engine_status = {
             **(result.engine_status or {}),
+            "diagram_coverage": diagram_coverage(graph, threats),
             "local_intelligence": local_diagnostics,
             "disagreements": disagreement_diagnostics,
             "confidence_calibration": confidence_diagnostics,
@@ -751,10 +840,17 @@ class ThreatAnalyzer:
             "quality_gate": self._runtime_quality_gate(
                 result.architecture_validation or {"valid": True}, threats, stride_coverage, local_diagnostics,
                 disagreement_diagnostics, result.architecture,
+                ((result.attack_chains or {}).get("paths") or []),
             ),
         }
         result.finding_groups = group_findings(threats)
         result.risk_methodology = risk_methodology()
+        result.risk_methodology["score_breakdown"] = {
+            **self._score_breakdown(threats),
+            "determined_control_ratio": (result.engine_status or {}).get("quality_gate", {}).get(
+                "determined_control_ratio", 0.0
+            ),
+        }
         result.report_markdown = self._generate_report_markdown(result)
         return result
 
@@ -871,8 +967,74 @@ class ThreatAnalyzer:
                     explanation={
                         "scope_resolution": "literal_component_sentence",
                         "scope_warning": None,
+                        "matched_controls": list(CONTROL_PROPERTIES.get(rule['control'], ())),
                     },
                 ))
+
+        for index, weakness in enumerate(
+            (architecture.metadata or {}).get('unscoped_stated_weaknesses') or [], 1
+        ):
+            rule = GENERIC_WEAKNESS_RULES_BY_ID.get(weakness['rule_id'])
+            if not rule:
+                continue
+            statement = weakness['statement']
+            covered = next(
+                (
+                    threat for threat in threats
+                    if str(threat.id).startswith(rule['id'])
+                    and statement in " ".join(threat.evidence or [])
+                ),
+                None,
+            )
+            if covered is not None:
+                continue
+            severity = rule['severity'].title()
+            threats.append(Threat(
+                id=f"{rule['id']}-UNSCOPED-{index:02d}",
+                category=rule['category'],
+                stride_category=rule['category'],
+                affected_stride_categories=list(rule['stride']),
+                title=f"Stated weakness requiring component mapping: {_summarize(statement)}",
+                description=statement,
+                severity=severity,
+                severity_source="rule",
+                likelihood="High",
+                impact="High" if severity in {"Critical", "High"} else "Medium",
+                risk_score=90 if severity == "Critical" else 75 if severity == "High" else 55,
+                confidence="High",
+                mitigation=rule['mitigation'],
+                root_cause="The description states this weakness directly, but its component was not resolved.",
+                realistic_attack_scenario=(
+                    "An attacker exploits the stated weakness after the unresolved architecture "
+                    f"scope is confirmed: {statement}"
+                ),
+                attack_scenario=(
+                    "An attacker exploits the stated weakness after the unresolved architecture "
+                    f"scope is confirmed: {statement}"
+                ),
+                business_impact=map_business_impact({"title": statement, "severity": severity}),
+                evidence=[f"Stated in the architecture description: {statement}"],
+                evidence_details=[{
+                    "source_type": "architecture_input",
+                    "source_ref": "unresolved_component",
+                    "line": None,
+                    "statement": statement,
+                    "confidence": "High",
+                }],
+                affected_components=[],
+                affected_data_flows=[],
+                affected_assets=[],
+                tier="Confirmed",
+                status="Identified",
+                finding_type="control_gap",
+                owasp_top_10=list(rule['owasp']),
+                cwe=list(rule['cwe']),
+                explanation={
+                    "scope_resolution": "unresolved_explicit_statement",
+                    "scope_warning": "Confirmed source weakness; affected component requires analyst mapping.",
+                    "matched_controls": list(CONTROL_PROPERTIES.get(rule['control'], ())),
+                },
+            ))
         return threats
 
     def _flag_untrusted_instructions(
@@ -1007,6 +1169,7 @@ class ThreatAnalyzer:
                     "origin": "declared_known_issue",
                     "scope_resolution": issue.get("component_resolution", "unresolved"),
                     "scope_warning": None if primary_component else "Confirmed source issue; affected component requires analyst mapping.",
+                    "matched_controls": list(CONTROL_PROPERTIES.get(issue.get("control"), ())),
                 },
             )
             threats.append(threat)
@@ -1018,14 +1181,18 @@ class ThreatAnalyzer:
             + [("code", item) for item in metadata.get("security_findings", [])]
         )
         for source_kind, finding in source_findings:
+            evidence_kind = finding.get("evidence_kind", "explicit")
+            evidence_source = f"{source_kind}_absence" if evidence_kind == "absence" else source_kind
             severity = str(finding.get("severity", "Medium")).title()
             severity_score = {"Critical": 95, "High": 80, "Medium": 55, "Low": 30}.get(severity, 55)
             finding_text = f"{finding.get('rule_id', '')} {finding.get('title', '')}".upper()
-            exposure = "public" if any(token in finding_text for token in ("PUBLIC", "OPEN", "INTERNET")) else "internal"
+            exposure = finding.get("exposure") or ("public" if any(token in finding_text for token in ("PUBLIC", "OPEN", "INTERNET")) else "internal")
             resource_id = finding.get("resource_id")
             component_id = resource_id if resource_id in component_ids else (
                 "source" if source_kind == "code" and "source" in component_ids else None
             )
+            if component_id is None and source_kind == "iac" and "terraform.configuration" in component_ids:
+                component_id = "terraform.configuration"
             evidence = finding.get("evidence", []) or [finding.get("description", "Static analysis rule matched.")]
             threats.append(Threat(
                 id=finding.get("id") or f"IAC-{len(threats) + 1}",
@@ -1047,14 +1214,17 @@ class ThreatAnalyzer:
                 business_impact=map_business_impact({"title": finding.get("title", "Security finding"), "severity": severity}),
                 evidence=evidence,
                 evidence_details=[{
-                    "source_type": source_kind,
+                    "source_type": evidence_source,
                     "source_ref": str(resource_id or finding.get("rule_id") or "source"),
                     "line": finding.get("line"),
+                    "document": finding.get("source_file"),
+                    "locator": finding.get("locator"),
                     "statement": item,
                     "confidence": "High",
                 } for item in evidence],
                 cwe=finding.get("cwe", []),
-                owasp_top_10=owasp_for(finding.get("cwe", []), finding.get("category")),
+                owasp_top_10=finding.get("owasp_top_10", []) or owasp_for(finding.get("cwe", []), finding.get("category")),
+                nist_800_53=finding.get("nist_800_53", []),
                 exposure=exposure,
                 data_sensitivity="sensitive",
                 # Complexity is left unstated on purpose. Deriving it from the
@@ -1066,7 +1236,16 @@ class ThreatAnalyzer:
                 affected_components=[component_id] if component_id else [],
                 tier="Confirmed",
                 status="Identified",
-                finding_type=source_kind,
+                finding_type=f"{source_kind}_candidate" if evidence_kind == "absence" else source_kind,
+                explanation={
+                    "origin": f"{source_kind}_rule",
+                    "rule_id": finding.get("rule_id"),
+                    "rule_metadata": finding.get("rule_metadata", {}),
+                    "references": finding.get("references", []),
+                    "verification": finding.get("verification"),
+                    "exposure_evidence": exposure,
+                    "control_state": "unknown" if evidence_kind == "absence" else "missing",
+                },
             ))
         return threats
 
@@ -1312,28 +1491,70 @@ class ThreatAnalyzer:
         threat.explanation = explanation
 
     def _attach_attack_paths(self, threats: List[Threat], attack_paths: List[Dict[str, Any]]) -> List[Threat]:
+        paths_by_finding = {path.get("related_threat_id"): path for path in attack_paths}
         for threat in threats:
-            for path in attack_paths:
-                if path.get("related_threat_id") == threat.id:
-                    threat.attack_path = path
-                    if path.get("steps"):
-                        threat.attack_scenario = threat.attack_scenario or " ".join(path["steps"])
-                    break
+            threat.attack_path = paths_by_finding.get(threat.id)
+            if threat.attack_path:
+                explanation = dict(threat.explanation or {})
+                explanation.pop("attack_path_reason", None)
+                explanation["attack_path_status"] = threat.attack_path.get("path_status")
+                threat.explanation = explanation
+                if threat.attack_path.get("steps"):
+                    threat.attack_scenario = threat.attack_scenario or " ".join(threat.attack_path["steps"])
         return threats
 
     def _enrich_threat_explanations(self, threats: List[Threat], architecture: SystemArchitecture) -> List[Threat]:
         component_map = {component.id: component for component in architecture.components}
         incident_flows = self._flows_by_component(architecture)
+        local_models = model_status()
         for threat in threats:
             component = component_map.get(threat.affected_component or threat.component_id or "")
-            threat.explanation.update({
+            explanation = dict(threat.explanation or {})
+            if component:
+                controls = set(explanation.get('matched_controls') or [])
+                explanation['correlated_evidence'] = [fact for fact in component.properties.get('correlation_evidence', [])
+                    if not controls or fact.get('control') in controls]
+                explanation['correlated_controls'] = {key: value for key, value in component.properties.get('correlated_controls', {}).items()
+                    if not controls or key in controls}
+            rule = self._rule_for_finding(threat.id)
+            if rule:
+                explanation["framework_mappings"] = rule.get("framework_mappings") or []
+                explanation["framework_mapping_issues"] = rule.get("framework_mapping_issues") or []
+            else:
+                mappings, issues = resolve_mappings({"cwe": threat.cwe, "mitre_attack": threat.mitre_attack, "mitre_atlas": threat.mitre_atlas})
+                explanation["framework_mappings"] = mappings
+                explanation["framework_mapping_issues"] = issues
+            explanation.update({
                 "component_name": component.name if component else None,
                 "trust_level": component.trust_level if component else None,
                 "asset_sensitivity": threat.data_sensitivity,
                 "root_cause": threat.root_cause,
+                "provenance": {
+                    "finding_id": threat.id,
+                    "producer": threat.finding_type or "architecture",
+                    "evidence_sources": sorted({
+                        str(item.get("source_type") or "unknown")
+                        for item in (threat.evidence_details or [])
+                    }),
+                    "knowledge_rule": rule_provenance(rule) if rule else None,
+                    "models": [
+                        {key: item.get(key) for key in ("role", "model", "revision", "loaded", "fallback")}
+                        for item in local_models.get("models") or []
+                    ],
+                    "engine_version": "2.3.1",
+                },
             })
+            threat.explanation = explanation
             self._describe_flow_context(threat, architecture, incident_flows)
         return threats
+
+    def _rule_for_finding(self, finding_id: str) -> Optional[Dict[str, Any]]:
+        normalized = re.sub(r"^KB-", "", str(finding_id or ""))
+        for rule in self.knowledge_base.get_all_threats():
+            rule_id = str(rule.get("id") or "")
+            if normalized == rule_id or normalized.startswith(f"{rule_id}-"):
+                return rule
+        return None
 
     @staticmethod
     def _cite_evidence_sources(threats: List[Threat], architecture: SystemArchitecture) -> List[Threat]:
@@ -1496,10 +1717,48 @@ class ThreatAnalyzer:
         return actions
 
     def _calculate_score(self, threats: List[Threat]) -> int:
+        return self._score_breakdown(threats)["overall_score"]
+
+    @classmethod
+    def _score_breakdown(cls, threats: List[Threat]) -> Dict[str, Any]:
         if not threats:
-            return 100
-        deduction = 0
+            return {
+                "overall_score": 100, "confirmed_risk_score": 100,
+                "uncertainty_penalty": 0, "unique_risk_groups": 0,
+                "formula": "No modeled findings.",
+            }
+
+        # Count one root control once. Repeated framework mappings and producers
+        # should not make a system look less secure than the underlying defects.
+        unique: Dict[Tuple[str, str, str], Threat] = {}
         for threat in threats:
-            weight = 1.0 if threat.tier == "Confirmed" else 0.6
-            deduction += ((threat.risk_score or 0) / 10) * weight
-        return max(0, min(100, int(100 - deduction)))
+            component = threat.component or threat.affected_component or "unmapped"
+            controls = (threat.explanation or {}).get("matched_controls") or []
+            root = str(controls[0]) if controls else cls._root_signature(threat) or threat.id
+            key = (component, threat.stride_category or threat.category, root)
+            if key not in unique or (threat.risk_score or 0) > (unique[key].risk_score or 0):
+                unique[key] = threat
+
+        confirmed_burden = sum(
+            ((threat.risk_score or 0) / 100) ** 1.35
+            for threat in unique.values() if threat.tier == "Confirmed"
+        )
+        potential_burden = sum(
+            ((threat.risk_score or 0) / 100) ** 1.35 * 0.2
+            for threat in unique.values() if threat.tier != "Confirmed"
+        )
+        confirmed_score = round(100 / (1 + confirmed_burden / 3.0))
+        uncertainty_penalty = min(15, round(potential_burden * 2.5))
+        overall = max(5 if confirmed_burden else 20, confirmed_score - uncertainty_penalty)
+        return {
+            "overall_score": min(100, overall),
+            "confirmed_risk_score": min(100, confirmed_score),
+            "uncertainty_penalty": uncertainty_penalty,
+            "unique_risk_groups": len(unique),
+            "confirmed_burden": round(confirmed_burden, 3),
+            "potential_burden": round(potential_burden, 3),
+            "formula": (
+                "Deduplicated root risks use diminishing impact; potential findings contribute "
+                "one fifth of confirmed risk and are shown as a separate uncertainty penalty."
+            ),
+        }

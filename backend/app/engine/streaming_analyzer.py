@@ -9,6 +9,7 @@ and silently drifted out of sync with it.
 
 import asyncio
 import logging
+import os
 from datetime import datetime
 from functools import partial
 from typing import Any, Awaitable, Callable, Dict, List, Optional
@@ -16,6 +17,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 from .analyzer import ThreatAnalyzer
 from .progress import ANALYSIS_PHASES, COMPLETE_PROGRESS
 from ..models import AnalysisResult
+from ..services.analysis_workers import analysis_workers
 
 logger = logging.getLogger(__name__)
 
@@ -50,8 +52,11 @@ class StreamingAnalyzer:
         def sink(event: Dict[str, Any]) -> None:
             # Called from the analysis thread, so hand the event to the loop
             # rather than touching the queue directly.
-            loop.call_soon_threadsafe(events.put_nowait, event)
+            if not closed.is_set() and not loop.is_closed():
+                loop.call_soon_threadsafe(events.put_nowait, event)
 
+        import threading
+        closed = threading.Event()
         forwarder = asyncio.create_task(self._forward(events))
         analyze = partial(
             analyzer.analyze_from_text,
@@ -64,8 +69,9 @@ class StreamingAnalyzer:
             progress=sink,
         )
         try:
-            result = await asyncio.to_thread(analyze)
+            result = await analysis_workers.run(analyze, timeout=int(os.getenv("AEGIS_THREAT_ANALYSIS_TIMEOUT_SECONDS", "300")))
         finally:
+            closed.set()
             await events.put(None)
             await forwarder
 

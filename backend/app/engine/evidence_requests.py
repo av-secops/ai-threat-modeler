@@ -22,7 +22,7 @@ CONTROL_FAMILIES: List[Dict[str, Any]] = [
     {
         "id": "AUTHN",
         "title": "Authentication strength",
-        "controls": {"auth_type", "mfa_enabled", "mtls_enabled"},
+        "controls": {"auth_type", "mfa_enabled", "mtls_enabled", "token_revocation"},
         "question": "How does each of these elements authenticate its callers, and is multi-factor or mutual TLS required?",
         "accepted_evidence": [
             "Identity provider configuration or policy showing the enforced method",
@@ -34,7 +34,7 @@ CONTROL_FAMILIES: List[Dict[str, Any]] = [
     {
         "id": "AUTHZ",
         "title": "Authorization model",
-        "controls": {"authorization", "rbac_enabled", "abac_enabled"},
+        "controls": {"authorization", "rbac_enabled", "abac_enabled", "tenant_isolation", "object_level_auth"},
         "question": "What authorization model governs these elements, and which roles or attributes are allowed to reach them?",
         "accepted_evidence": [
             "Role or policy definitions, including a dedicated role per sensitive service",
@@ -68,7 +68,7 @@ CONTROL_FAMILIES: List[Dict[str, Any]] = [
     {
         "id": "AUDIT",
         "title": "Audit logging and accountability",
-        "controls": {"audit_logging", "logging_enabled"},
+        "controls": {"audit_logging", "logging_enabled", "log_integrity"},
         "question": "What security-relevant events do these elements record, where do the logs go, and how long are they kept?",
         "accepted_evidence": [
             "Log destination, retention period, and whether the logs are tamper-evident",
@@ -90,7 +90,7 @@ CONTROL_FAMILIES: List[Dict[str, Any]] = [
     {
         "id": "AVAILABILITY",
         "title": "Rate limiting and resilience",
-        "controls": {"rate_limiting", "waf_enabled", "resilience", "multi_region", "replication", "backup_enabled", "autoscaling"},
+        "controls": {"rate_limiting", "waf_enabled", "resilience", "multi_region", "replication", "backup_enabled", "autoscaling", "request_size_limit", "query_depth_limiting", "concurrency_limits"},
         "question": "What quotas, rate limits, or redundancy protect these elements, and what recovery objective applies?",
         "accepted_evidence": [
             "Rate limit or quota per exposed interface",
@@ -126,7 +126,7 @@ PRIORITY_ORDER = {"Critical": 0, "High": 1, "Medium": 2, "Low": 3}
 
 def build_evidence_requests(coverage: Dict[str, Any], architecture=None) -> Dict[str, Any]:
     """Group every unresolved coverage cell into prioritized evidence requests."""
-    all_unresolved = [cell for cell in coverage.get("cells", []) if cell.get("status") in _UNRESOLVED_STATUSES]
+    all_unresolved = [cell for cell in coverage.get("cells", []) if cell.get("status") in _UNRESOLVED_STATUSES or cell.get("unresolved_controls")]
     cells = [cell for cell in all_unresolved if cell.get("element_kind") not in _KINDS_WITHOUT_OWNERS]
     boundary_cells = len(all_unresolved) - len(cells)
     elements_by_id = {element["id"]: element for element in coverage.get("elements", [])}
@@ -169,7 +169,7 @@ def build_evidence_requests(coverage: Dict[str, Any], architecture=None) -> Dict
 
 def _family_for(cell: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Pick the family for a cell, preferring the most specific control named."""
-    controls = cell.get("expected_controls") or cell.get("controls") or []
+    controls = cell.get("unresolved_controls") or cell.get("expected_controls") or cell.get("controls") or []
     for control in controls:
         family = _FAMILY_BY_CONTROL.get(control)
         if family is not None:

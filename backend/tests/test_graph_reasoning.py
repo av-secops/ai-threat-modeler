@@ -170,12 +170,10 @@ def test_a_finding_is_reached_through_the_architecture_not_at_itself():
 
 def test_a_path_names_the_data_it_opens_up():
     result = ThreatAnalyzer().analyze_from_text(HEALTHCARE, use_local_slm=False)
-    portal = next(
-        threat for threat in result.threats
-        if threat.component == "react" and threat.attack_path
-    )
+    reached = next(threat for threat in result.threats if threat.attack_path)
 
-    assert portal.attack_path["sensitive_data_reached"]
+    assert reached.attack_path["hops"]
+    assert reached.attack_path["sensitive_data_reached"]
 
 
 def test_one_control_absent_on_one_component_is_one_finding():

@@ -8,10 +8,12 @@ Provides:
 """
 
 import logging
+import os
 import numpy as np
 from typing import List, Tuple, Optional, Dict, Any
 
 from . import model_policy
+from .retrieval_config import configured_embedding_model, configured_profile
 
 logger = logging.getLogger(__name__)
 
@@ -35,22 +37,25 @@ except ImportError:
 class EmbeddingService:
     """
     Generate and manage text embeddings using sentence-transformers.
-    Falls back to TF-IDF based similarity when sentence-transformers unavailable.
+    Falls back to deterministic local hashing when sentence-transformers is unavailable.
     """
     
-    # Use a small, fast model that still has good quality
-    DEFAULT_MODEL = "all-MiniLM-L6-v2"
+    DEFAULT_MODEL = "BAAI/bge-base-en-v1.5"
+    BGE_QUERY_INSTRUCTION = "Represent this sentence for searching relevant passages: "
+    FALLBACK_DIMENSION = 128
     
-    def __init__(self, model_name: str = None):
+    def __init__(self, model_name: str = None, role: str = "embeddings"):
         self.model = None
-        self.model_name = model_name or self.DEFAULT_MODEL
-        self._dimension = 384  # Default for MiniLM
+        self.model_name = model_name or configured_embedding_model()
+        self.role = role
+        self._dimension = _known_dimension(self.model_name)
         self._load_model()
     
     def _load_model(self):
         """Load the sentence-transformer model."""
         if not EMBEDDINGS_AVAILABLE:
-            logger.info("Sentence-transformers not available. Using TF-IDF fallback.")
+            logger.info("Sentence-transformers not available. Using local hashing fallback.")
+            self._dimension = self.FALLBACK_DIMENSION
             return
         
         try:
@@ -61,12 +66,13 @@ class EmbeddingService:
             )
             self._dimension = self.model.get_sentence_embedding_dimension()
             logger.info(f"Embedding model loaded. Dimension: {self._dimension}")
-            model_policy.note_model(self.model_name, "embeddings", loaded=True)
+            model_policy.note_model(self.model_name, self.role, loaded=True)
         except Exception as e:
-            logger.warning(f"Failed to load embedding model: {e}. Using TF-IDF fallback.")
+            logger.warning(f"Failed to load embedding model: {e}. Using local hashing fallback.")
             self.model = None
+            self._dimension = self.FALLBACK_DIMENSION
             model_policy.note_model(
-                self.model_name, "embeddings", loaded=False, error=str(e), fallback="tf-idf",
+                self.model_name, self.role, loaded=False, error=str(e), fallback="bm25_local_hashing",
             )
     
     @property
@@ -83,6 +89,25 @@ class EmbeddingService:
     def backend(self) -> str:
         """Identify the active backend without overstating model capability."""
         return "sentence_transformer" if self.model is not None else "local_hashing"
+
+    @property
+    def query_instruction(self) -> str:
+        configured = os.getenv("AEGIS_THREAT_EMBEDDING_QUERY_INSTRUCTION")
+        if configured is not None:
+            return configured
+        return self.BGE_QUERY_INSTRUCTION if "bge-" in self.model_name.lower() else ""
+
+    @property
+    def index_signature(self) -> Dict[str, Any]:
+        return {
+            "profile": configured_profile().name,
+            "model": self.model_name,
+            "revision": model_policy.locked_revision(self.model_name),
+            "dimension": self.dimension,
+            "backend": self.backend,
+            "normalized": True,
+            "document_instruction": "",
+        }
     
     def embed(self, text: str) -> np.ndarray:
         """
@@ -97,6 +122,23 @@ class EmbeddingService:
         if self.model:
             return self.model.encode(text, convert_to_numpy=True, normalize_embeddings=True)
         return self._fallback_embed(text)
+
+    def embed_query(self, text: str) -> np.ndarray:
+        """Embed a retrieval query, applying the model's asymmetric instruction."""
+        query = f"{self.query_instruction}{text}" if self.query_instruction else text
+        return self.embed(query)
+
+    def embed_queries(self, texts: List[str], batch_size: int = 64) -> np.ndarray:
+        """Embed retrieval queries in one model call with query instructions."""
+        queries = [
+            f"{self.query_instruction}{text}" if self.query_instruction else text
+            for text in texts
+        ]
+        return self.embed_batch(queries, batch_size=batch_size)
+
+    def embed_document(self, text: str) -> np.ndarray:
+        """Embed a knowledge document without a query-only instruction."""
+        return self.embed(text)
     
     def embed_batch(self, texts: List[str], batch_size: int = 64) -> np.ndarray:
         """
@@ -150,15 +192,14 @@ class EmbeddingService:
     
     def _fallback_embed(self, text: str) -> np.ndarray:
         """
-        Fallback embedding using simple TF-IDF-like hashing.
+        Fallback embedding using deterministic term hashing.
         Not as good as transformer embeddings but works without dependencies.
         """
         from hashlib import sha256
         
         words = text.lower().split()
         # Use a fixed-size hash-based embedding
-        dim = 128
-        self._dimension = dim
+        dim = self._dimension
         embedding = np.zeros(dim, dtype=np.float32)
         
         for i, word in enumerate(words):
@@ -213,6 +254,12 @@ class VectorStore:
         embeddings = np.asarray(embeddings, dtype=np.float32)
         if embeddings.ndim == 1:
             embeddings = embeddings.reshape(1, -1)
+        if embeddings.shape[1] != self.dimension:
+            raise ValueError(
+                f"Vector dimension {embeddings.shape[1]} does not match index dimension {self.dimension}"
+            )
+        if embeddings.shape[0] != len(metadata):
+            raise ValueError("Embedding and metadata counts must match")
         
         if FAISS_AVAILABLE and self.index is not None:
             self.index.add(embeddings)
@@ -289,7 +336,7 @@ def get_embedding_service() -> EmbeddingService:
 def get_or_create_vector_store(dimension: int = 384) -> VectorStore:
     """Get or create global vector store."""
     global _vector_store
-    if _vector_store is None:
+    if _vector_store is None or _vector_store.dimension != dimension:
         _vector_store = VectorStore(dimension)
     return _vector_store
 
@@ -298,3 +345,20 @@ def reset_vector_store():
     """Reset the global vector store so it can be rebuilt from fresh KB data."""
     global _vector_store
     _vector_store = None
+
+
+def reset_embedding_service():
+    """Reset the model binding so profile changes are applied on reload."""
+    global _embedding_service
+    _embedding_service = None
+
+
+def _known_dimension(model_name: str) -> int:
+    lowered = model_name.lower()
+    if "bge-large" in lowered:
+        return 1024
+    if "bge-base" in lowered or "mpnet-base" in lowered or "nomic-embed" in lowered:
+        return 768
+    if "minilm" in lowered or "bge-small" in lowered:
+        return 384
+    return 384

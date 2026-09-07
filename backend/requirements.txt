@@ -1,9 +1,12 @@
-# Aegis Threat backend dependencies (Python 3.10+).
+# Aegis Threat 2.3.1 backend dependencies (Python 3.10+; tested on 3.12).
+# Includes evaluation tools used by the local development launcher and CI.
+# Model weights are not installed by pip; see tools/prefetch_models.py.
 
 # Web framework
 fastapi>=0.115.0,<1.0.0
 uvicorn[standard]>=0.34.0,<1.0.0
 python-multipart>=0.0.9,<1.0.0
+python-dotenv>=1.0.0,<2.0.0
 
 # Core analysis and modeling
 networkx>=3.4.0,<4.0.0
@@ -12,10 +15,17 @@ numpy>=1.26.0,<3.0.0
 pyyaml>=6.0.1,<7.0.0
 pypdf>=5.5.0,<6.0.0
 python-docx>=1.1.2,<2.0.0
+python-hcl2>=7.3.1,<8.0.0
+PyMuPDF>=1.24.0,<2.0.0
+pytesseract>=0.3.13,<1.0.0
+Pillow>=10.0.0,<13.0.0
+rapidocr-onnxruntime>=1.4.4,<2.0.0
+packaging>=24.0,<27.0
 
 # NLP and local model runtime
 blingfire>=0.1.8,<1.0.0
 transformers>=4.49.0,<5.0.0
+huggingface-hub>=0.28.0,<1.0.0
 torch>=2.2.0,<3.0.0
 
 # Semantic retrieval and local ML
@@ -23,14 +33,19 @@ sentence-transformers>=3.4.0,<4.0.0
 faiss-cpu>=1.10.0,<2.0.0
 scikit-learn>=1.4.0,<2.0.0
 
+# Offline fine-tuning and governed dataset evaluation
+datasets>=3.2.0,<5.0.0
+accelerate>=1.2.0,<2.0.0
+# 0.70.18+ uses an unsupported RLock shutdown API on Windows/Python 3.12.
+multiprocess==0.70.17
+
 # Optional LLM integrations
 openai>=1.0.0,<2.0.0
 anthropic>=0.18.0,<1.0.0
 requests>=2.31.0,<3.0.0
 
 # Testing.
-# These are installed in the runtime image too, which is more than it needs;
-# splitting them into requirements-dev.txt is tracked separately.
+# Kept here for compatibility with existing Docker and local evaluation workflows.
 pytest>=8.0.0,<9.0.0
 pytest-asyncio>=0.23.0,<1.0.0
 pytest-cov>=4.1.0,<5.0.0

@@ -28,6 +28,7 @@ function FindingLine({ finding, tone }) {
       />
       <span className="min-w-0 text-sm leading-5 text-brand-700 dark:text-brand-300">
         {finding.title}
+        {finding.reason && <span className="mt-1 block text-xs text-brand-500 dark:text-brand-400">{finding.reason}</span>}
         <span className={`ml-2 text-xs font-semibold ${severityTone[finding.severity] || 'text-brand-500'}`}>
           {finding.severity}
         </span>
@@ -114,6 +115,7 @@ export default function ReanalysisDiff({ diff }) {
           <p className="text-xs font-semibold uppercase tracking-wide text-brand-500 dark:text-brand-400">
             No longer reported
           </p>
+          <p className="mt-1 text-xs text-brand-500 dark:text-brand-400">This is not evidence that a vulnerability was fixed.</p>
           <ul className="mt-1">
             {resolved.map((finding) => (
               <FindingLine key={finding.id} finding={finding} tone="resolved" />
@@ -121,6 +123,8 @@ export default function ReanalysisDiff({ diff }) {
           </ul>
         </div>
       )}
+
+      {!!diff.revalidation_required?.length && <p className="border-l-2 border-amber-500 pl-3 text-sm text-amber-800 dark:text-amber-300">{diff.revalidation_required.length} retained findings need review again because their evidence or assessment changed. Previous decisions remain in the earlier revision.</p>}
 
       {severityChanges.length > 0 && (
         <div>

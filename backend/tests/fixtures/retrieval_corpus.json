@@ -35,5 +35,79 @@
     "top_k": 5,
     "expected_ids": ["DB-001"],
     "forbidden_ids": ["AWS-S3-001", "AI-RAG-002", "T-008"]
+  },
+  {
+    "id": "aws_iam_wildcard_policy",
+    "query": "AWS IAM customer managed policy uses wildcard Action star and wildcard Resource star",
+    "component_type": "IAM",
+    "stride_category": "Elevation of Privilege",
+    "cloud_provider": "aws",
+    "top_k": 5,
+    "expected_ids": ["AWS-IAM-001"],
+    "forbidden_ids": ["DOS-007", "MCP-002", "DB-001"]
+  },
+  {
+    "id": "aws_kms_overbroad_key_policy",
+    "query": "KMS key policy allows every principal to decrypt sensitive data",
+    "component_type": "Secrets Manager",
+    "stride_category": "Information Disclosure",
+    "cloud_provider": "aws",
+    "top_k": 5,
+    "expected_ids": ["AWS-KMS-001"],
+    "forbidden_ids": ["DOS-007", "MCP-002", "T-008"]
+  },
+  {
+    "id": "session_survives_password_change",
+    "query": "Active session tokens remain valid after the user changes their password",
+    "component_type": "API",
+    "stride_category": "Spoofing",
+    "top_k": 5,
+    "expected_ids": ["WEB-API-013"],
+    "forbidden_ids": ["AWS-S3-001", "DOS-007", "MCP-002"]
+  },
+  {
+    "id": "graphql_unbounded_query_depth",
+    "query": "Public GraphQL endpoint has no query depth or complexity limit",
+    "component_type": "API",
+    "stride_category": "Denial of Service",
+    "top_k": 5,
+    "expected_ids": ["DOS-007"],
+    "forbidden_ids": ["AWS-KMS-001", "MCP-002", "S-008"]
+  },
+  {
+    "id": "kubernetes_privileged_workload",
+    "query": "Kubernetes workload runs a privileged container with host filesystem access",
+    "component_type": "Service",
+    "stride_category": "Elevation of Privilege",
+    "top_k": 5,
+    "expected_ids": ["DOM-K8S-001"],
+    "forbidden_ids": ["AWS-S3-001", "DOS-007", "T-008"]
+  },
+  {
+    "id": "mcp_command_injection",
+    "query": "MCP tool server passes untrusted tool arguments into an operating system command",
+    "component_type": "Service",
+    "stride_category": "Elevation of Privilege",
+    "top_k": 5,
+    "expected_ids": ["MCP-002"],
+    "forbidden_ids": ["AWS-S3-001", "DOS-007", "S-008"]
+  },
+  {
+    "id": "jwt_signature_not_validated",
+    "query": "REST API decodes JWT access tokens without validating the cryptographic signature",
+    "component_type": "API",
+    "stride_category": "Spoofing",
+    "top_k": 5,
+    "expected_ids": ["S-008"],
+    "forbidden_ids": ["AWS-KMS-001", "DOS-007", "MCP-002"]
+  },
+  {
+    "id": "rag_cross_tenant_leakage",
+    "query": "Multi-tenant RAG vector search retrieves another tenant's documents because tenant metadata filters are missing",
+    "component_type": "ML Service",
+    "stride_category": "Information Disclosure",
+    "top_k": 5,
+    "expected_ids": ["RAG-002"],
+    "forbidden_ids": ["AWS-S3-001", "DOS-007", "T-008"]
   }
 ]

@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: claim-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: claim-worker
+  template:
+    metadata:
+      labels:
+        app: claim-worker
+    spec:
+      automountServiceAccountToken: true
+      containers:
+        - name: worker
+          image: registry.example/claim-worker:latest
+          securityContext:
+            privileged: true
+            runAsUser: 0
+            allowPrivilegeEscalation: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: claim-worker
+spec:
+  type: LoadBalancer
+  selector:
+    app: claim-worker
+  ports:
+    - port: 443
+      targetPort: 8080

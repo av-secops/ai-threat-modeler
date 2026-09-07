@@ -1,4 +1,4 @@
-# Aegis Threat
+# Aegis Threat 2.3.1
 
 Aegis Threat is a local React and FastAPI application for building technical threat models from architecture descriptions and uploaded design documents. It combines deterministic security rules, STRIDE coverage, local semantic search, optional LLM review, attack-path analysis, compliance mappings, and report exports.
 
@@ -7,12 +7,41 @@ The deterministic engine remains the source of published findings. Semantic mode
 ## What it does
 
 - Parses components, assets, data flows, trust boundaries, assumptions, and known issues from text, Markdown, DOCX, PDF, JSON, YAML, and related text formats.
+- Analyzes related Terraform/HCL projects, Kubernetes and Helm, Kustomize, Compose, CloudFormation, ARM, Bicep, Pulumi, and CI workflows with source-file evidence.
 - Runs `fast`, `standard`, or `deep` analysis against web, API, identity, cloud, container, supply-chain, payment, healthcare, AI, LLM, agent, and MCP threat packs.
 - Maps findings to STRIDE, affected components and flows, root causes, attack scenarios, evidence, mitigations, and compliance references.
 - Produces Mermaid architecture diagrams, attack routes, missing-information questions, coverage summaries, and change summaries.
 - Supports SaaS, fintech, healthcare, AI, platform, and general domain profiles.
 - Includes an analyst workbench for notes, triage, ownership, action-register export, and local analysis assistance.
 - Exports Markdown, JSON, CSV, PNG, and PDF reports.
+
+The report has separate overview, architecture, risk register and assurance
+views. Findings can be searched and filtered by evidence, severity, STRIDE and
+review status; each opens a detail dialog with evidence and remediation. The
+architecture supports wheel zoom, buttons and panning in light and dark mode.
+
+Architecture and IaC analyses now open a review draft first. Check the components
+and connections, answer the priority questions you know, then analyze the reviewed
+model. You can leave unknowns open and return to them later.
+
+Use **Update this model** to add context, replace a file or correct a connection.
+Each successful analysis saves a new report revision. History also restores
+unfinished drafts. Sources are kept as extracted text in this browser; use
+**Export workspace** for a JSON archive. Details are in
+[the guided review notes](docs/guided-model-review.md).
+
+Prompt and document claims are correlated by component, flow, endpoint and
+deployment scope. The review diagram updates automatically after an edit, and
+its evidence inspector links back to the source text. Conflicts and unassigned
+claims remain visible. See [source correlation](docs/source-correlation.md).
+
+Controls can be present, absent, partial, unknown or conflicting. A finding in
+one STRIDE category does not resolve every other control in that category.
+Submitted Terraform plan JSON is also supported, with explicit unknown-value and
+coverage limits. Analysis concurrency defaults to two workers per process;
+`AEGIS_THREAT_ANALYSIS_CONCURRENCY` and `AEGIS_THREAT_ANALYSIS_TIMEOUT_SECONDS`
+control admission and caller timeouts. Timed-out work retains its slot until it
+actually finishes.
 
 ## Repository layout
 
@@ -43,6 +72,8 @@ are kept apart:
 | `source_index.py` | Which document, page and line a statement came from |
 | `flow_extraction.py` | Which data flows a description states, and in which direction |
 | `control_statements.py` | Whether a control is claimed or denied, and about what |
+| `source_correlation.py` | Matches source claims to elements, scope and control state |
+| `control_contracts.py` | Shared control vocabulary used by correlation and STRIDE |
 | `graph.py` | Reachability and how data classification travels |
 | `parser.py` | Assembles the canonical architecture from all of the above |
 | `stride_coverage_engine.py` | Assesses every element against every STRIDE category |
@@ -96,7 +127,9 @@ inherits it, so the API in front of the database is scored as handling PHI witho
 you having to repeat it. Each component records whether its classification was
 `stated` or `propagated`, and a propagated value never overrides a stated one.
 
-Anything the description does not say becomes a question rather than a finding.
+Unspecified controls should remain questions or clearly labelled potential risks,
+not confirmed vulnerabilities. Extraction and interpretation still need review;
+the known limitations below describe failures observed in a complex scenario.
 The gaps report names components whose connections were guessed, and the evidence
 requests list every unresolved control.
 
@@ -127,7 +160,7 @@ is treated as inferred rather than as stated by the design.
 ## How risk is scored
 
 Severity comes from one transparent calculation, published with each report under
-`risk_methodology` (currently `technical-v3`). Every finding carries the inputs
+`risk_methodology` (currently `technical-v4`). Every finding carries the inputs
 that produced its score in `risk_factors`:
 
 - **Reachability**: **exposure** and **privileges required** combined, then capped.
@@ -176,27 +209,67 @@ near-identical questions about whichever element happened to rank highest. The
 cap is reported in the coverage `guarantee`, and every cell left out is still
 listed in the evidence requests.
 
-Each confirmed finding also carries an `attack_path`: the route from a modelled
-entry point, hop by hop, with each hop marked `explicit` or `inferred`, plus the
-sensitive stores reachable beyond the target. Where no route exists, the path says
-so instead of being omitted.
+An attack path is published only when the validated graph contains a credible
+entry, target, at least one hop, and at least one explicitly stated hop. Each hop
+is marked `explicit` or `inferred`, cites its evidence, and records trust-boundary
+crossings, effective identity, required permissions, authorization transition,
+and network protocol. Inferred hops are also listed as assumptions. An isolated finding remains an exploit scenario; its explanation says
+why no path was modeled instead of drawing a zero-hop path.
+
+The system security score groups duplicate manifestations of the same root
+control gap before calculating impact. `technical-v4` reports the confirmed-risk
+score, the smaller uncertainty penalty from Potential findings, the unique root
+risk count, and the evidence-determined control ratio separately.
 
 ## Requirements
 
-- Node.js 18 or newer
-- npm 9 or newer
-- Python 3.10 or newer
-- `python` and `pip` available on `PATH`
+- Node.js 22.13+ or a newer even-numbered LTS release; npm 10+
+- Python 3.10+; Python 3.12 is recommended and used for local verification
+- On Windows, `py` or `python`, plus `node` and `npm`, available on `PATH`
+- Optional Tesseract OCR on `PATH`; RapidOCR provides a local fallback for scanned pages and embedded DOCX images
 
 ## Install and run
 
-Install both sets of dependencies:
+### Windows
+
+From the repository, run either helper:
+
+```powershell
+.\start.ps1
+# Or from Command Prompt: start.bat
+```
+
+The helpers create `backend/.venv` when needed, install missing dependencies,
+and wait for the API and frontend to respond before opening the browser. They
+can also be invoked by absolute path from another directory. Background servers
+bind only to `127.0.0.1`; output is written to `logs/`.
+
+```powershell
+.\start.ps1 -Check                    # Validate dependencies without starting
+.\start.ps1 -InstallDependencies      # Refresh pip dependencies and run npm ci
+.\start.ps1 -BackendPort 8001 -FrontendPort 5174 -NoBrowser
+.\start.ps1 -Stop                     # Stop only launcher-managed processes
+```
+
+Batch equivalents are `--check`, `--install`, `-b 8001 -f 5174 --no-browser`,
+and `--stop`. `--help` lists the options. Occupied ports cause a clear error;
+the launcher does not kill unrelated processes or silently choose a different port.
+For a slow first start, use PowerShell's `-StartupTimeout 240`.
+
+If your execution policy blocks the PowerShell script, inspect the downloaded
+files and follow your organization's policy. The launcher does not bypass that policy.
+
+### Manual Setup
+
+Create and use a virtual environment, then install from the root manifest:
 
 ```bash
-npm install
-cd backend
+python -m venv backend/.venv
+# Linux/macOS:
+source backend/.venv/bin/activate
+# Windows PowerShell: .\backend\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-cd ..
+npm ci
 ```
 
 Start the frontend and backend together:
@@ -224,19 +297,18 @@ python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 npm run dev -- --host 127.0.0.1 --port 5173
 ```
 
-Windows helper scripts are also included:
-
-```powershell
-.\start.ps1
-```
-
-```bat
-start.bat
-```
-
-If Python is not found, add it to `PATH` before starting the backend.
+`npm start` is the terminal-oriented development option, with reload enabled.
+It does not install dependencies or manage the Windows launcher's process state.
+The helper reads backend settings from a root `.env` file when present; shell
+variables take precedence. `.env` and local analysis/feedback output are excluded
+from Git. No model weights are downloaded during normal startup.
 
 ## Use it on your local network
+
+The helper scripts are local-only. Before any deliberate network deployment,
+set `ENVIRONMENT=production`, a narrow `ALLOWED_ORIGINS`, and `ADMIN_API_TOKEN`.
+Use a trusted network and an authenticated TLS reverse proxy; do not expose the
+Vite development server or an unprotected analysis API to the public Internet.
 
 Find the machine's IPv4 address with `ipconfig`, then bind both services to all interfaces:
 
@@ -279,9 +351,57 @@ Backend variables:
 - `AEGIS_THREAT_NER_MODEL`: Hugging Face model ID used for NER enrichment
 - `AEGIS_THREAT_LOCAL_SLM_MODEL`: locally available checkpoint for the review-only structured SLM
 - `AEGIS_THREAT_LOCAL_SLM_TASK`: Transformers pipeline task; defaults to `text2text-generation`
-- `AEGIS_THREAT_RERANKER_MODEL`: locally cached cross-encoder for second-stage retrieval; the built-in security-feature reranker is used when unset
+- `AEGIS_THREAT_RETRIEVAL_PROFILE`: `fast`, `balanced`, or `accuracy`; defaults to `balanced`
+- `AEGIS_THREAT_EMBEDDING_MODEL`: overrides the profile's local embedding model
+- `AEGIS_THREAT_RERANKER_MODEL`: overrides the profile's reranker; balanced mode uses the built-in security-feature reranker, while accuracy mode enables `BAAI/bge-reranker-base`
+- `AEGIS_THREAT_CLASSIFIER_EMBEDDING_MODEL`: stable embedding model for the advisory STRIDE classifier; defaults to `all-MiniLM-L6-v2`
+- `AEGIS_THREAT_MODEL_CACHE`: local Hugging Face model directory
+- `AEGIS_THREAT_ALLOW_MODEL_DOWNLOAD`: set to `1` only while prefetching models; analysis is offline by default
+- `AEGIS_THREAT_DENSE_WEIGHT` and `AEGIS_THREAT_LEXICAL_WEIGHT`: optional reciprocal-rank fusion weights
 
-The default local stack uses `blingfire` for segmentation, `all-MiniLM-L6-v2` through `sentence-transformers` for semantic retrieval, FAISS for vector search, and a scikit-learn STRIDE classifier. No spaCy model is required.
+The balanced local stack prefers a promoted `models/aegis-bge-security-v1`
+checkpoint when it is installed, otherwise it uses `BAAI/bge-base-en-v1.5`.
+It combines dense retrieval with BM25, reciprocal-rank fusion, a lightweight
+security-feature reranker, domain indexes, and FAISS. The deterministic STRIDE
+engine remains authoritative; retrieval supplies candidates and evidence. If a
+checkpoint is unavailable, retrieval remains local and falls back to BM25 plus
+deterministic hashing.
+
+Prefetch and verify the pinned models before an offline deployment:
+
+```bash
+cd backend
+AEGIS_THREAT_ALLOW_MODEL_DOWNLOAD=1 python tools/prefetch_models.py
+```
+
+Windows PowerShell equivalent, from the repository root:
+
+```powershell
+$env:AEGIS_THREAT_ALLOW_MODEL_DOWNLOAD = '1'
+.\backend\.venv\Scripts\python.exe backend\tools\prefetch_models.py
+$env:AEGIS_THREAT_ALLOW_MODEL_DOWNLOAD = '0'
+```
+
+The retrieval training set is generated from every validated knowledge rule,
+with same-domain hard negatives and a separate exhaustive evaluation corpus.
+Reviewer decisions are recorded but never enter training until an administrator
+approves them.
+
+```bash
+cd backend
+python tools/build_security_retrieval_dataset.py
+python tools/train_security_embeddings.py --output models/aegis-bge-security-v1
+python tools/compare_retrieval_models.py
+```
+
+Model promotion requires at least 98% retrieval recall, 0.90 mean reciprocal
+rank, zero incorrect hard negatives outranking an accepted rule, and a real
+embedding backend. Similar secondary candidates may still be retrieved because
+the deterministic applicability engine decides whether they become findings. The report
+records the model revision, rule version, source module, calibrated threshold,
+retrieval sources, cache state, and runtime latency statistics. Fine-tuned model
+directories are intentionally excluded from Git; their dataset hashes and
+training reports make them reproducible.
 
 ## API
 
@@ -289,10 +409,18 @@ The default local stack uses `blingfire` for segmentation, `all-MiniLM-L6-v2` th
 | --- | --- | --- |
 | `/analyze` | `POST` | Analyze an architecture description |
 | `/analyze-documents` | `POST` | Analyze uploaded design documents |
-| `/analyze-iac` | `POST` | Analyze Docker Compose or Kubernetes-style IaC |
+| `/model-review/sources` | `POST` | Extract files into reviewable source records |
+| `/model-review/prepare` | `POST` | Prepare or refresh the editable architecture and evidence |
+| `/model-review/analyze` | `POST` | Analyze the reviewed model and return a report revision |
+| `/analyze-iac` | `POST` | Analyze Terraform, CloudFormation, Kubernetes, or Docker Compose IaC |
+| `/analyze-iac-project` | `POST` | Analyze related IaC files together |
+| `/analyze-code` | `POST` | Analyze supported source-code inputs |
 | `/analyze-with-llm` | `POST` | Add an external LLM challenger with retrieved context |
 | `/validate-api-key` | `POST` | Validate a provider API key |
 | `/health` | `GET` | Check API and local ML readiness |
+| `/feedback/findings` | `POST` | Record an analyst review decision without auto-approving it for training |
+| `/admin/retrieval-feedback/approve` | `POST` | Approve feedback and rebuild calibrated thresholds |
+| `/admin/retrieval-metrics` | `GET` | Inspect retrieval latency, fallback, cache, and query metrics |
 | `/cache` | `DELETE` | Clear analysis caches; admin protected |
 | `/admin/retrain-local-models` | `POST` | Reload the knowledge base and retrain local artifacts |
 | `/ws/analyze` | `WS` | Stream analysis progress |
@@ -343,6 +471,9 @@ The same operation is available through `POST /admin/retrain-local-models`.
 npm test          # backend suite without the slow tests, across processes
 npm run test:all  # the whole backend suite
 npm run lint      # frontend
+npm run build     # production frontend bundle
+node --test scripts/model-workspace.test.mjs
+node --test scripts/startup.test.mjs
 ```
 
 Most of the suite's wall time is engine import rather than assertions, which is
@@ -406,6 +537,21 @@ left unread, and the report states them beside the scope counts they qualify.
 Findings from the pages that were read are still published.
 
 The dashboard supports finding states such as open, mitigated, accepted, and false positive. Mermaid labels and IDs are sanitized before rendering, and frontend response normalization is handled in [`src/utils/analysisMapper.js`](src/utils/analysisMapper.js).
+
+### Known Limitations in This 2.3.1 Update
+
+The [Nexora telecom scenario review](docs/scenarios/nexora-telecom-26.09/chrome-review-2026-09-07.md)
+found missed declared weaknesses, explanatory sentences misread as absent
+controls, incorrect data classification, and a false control conflict that
+blocked final export. Large diagrams can also simplify away important flows
+and draw boundaries differently from the declared model. These analysis defects
+are documented, not fixed by this startup/documentation update.
+
+Treat this release as an assisted review tool, not a security sign-off engine.
+"Confirmed" means the engine found supporting input evidence, not that the
+deployment was tested. "100% STRIDE assessed" is not complete threat coverage;
+check evidence resolution and the original documents as well. Product/release
+hierarchy management remains a [saved workplan](docs/product-release-workplan.md).
 
 ## License
 

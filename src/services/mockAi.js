@@ -98,6 +98,24 @@ export const analyzeIac = async (iacContent, projectName = "Untitled Project", f
     }
 };
 
+export const analyzeIacProject = async (files, projectName = "Untitled IaC Project") => {
+    const formData = new FormData();
+    formData.append('project_name', projectName);
+    formData.append('analysis_mode', 'standard');
+    for (const file of files || []) {
+        formData.append('files', file);
+    }
+    const response = await fetch(`${API_BASE_URL}/analyze-iac-project`, {
+        method: 'POST',
+        body: formData,
+    });
+    if (!response.ok) {
+        const errorPayload = await response.json().catch(() => null);
+        throw new Error(errorPayload?.detail || `API error: ${response.status}`);
+    }
+    return mapAnalysisResult(await response.json());
+};
+
 export const analyzeCode = async (codeContent, projectName = "Source Security Audit", language = 'auto') => {
     try {
         const response = await fetch(`${API_BASE_URL}/analyze-code`, {

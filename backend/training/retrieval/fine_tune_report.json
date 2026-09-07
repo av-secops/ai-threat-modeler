@@ -1,0 +1,13 @@
+{
+  "base_model": "BAAI/bge-base-en-v1.5",
+  "batch_size": 6,
+  "device": "cuda",
+  "epochs": 1,
+  "metrics": {
+    "security-holdout_cosine_accuracy": 1.0
+  },
+  "output": "models\\aegis-bge-security-v1",
+  "schema_version": "security-embedding-training-1.0",
+  "training_examples": 504,
+  "validation_examples": 39
+}

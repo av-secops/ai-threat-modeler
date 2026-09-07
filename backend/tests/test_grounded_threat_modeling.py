@@ -125,15 +125,17 @@ def test_healthcare_known_issues_cover_multiple_stride_categories():
     assert findings['AUTH-LONG-LIVED-SESSION-001'].affected_components == ['redis', 'azure_ad', 'rest_api']
 
 
-def test_healthcare_confirmed_identity_issues_suppress_duplicate_potentials():
+def test_healthcare_session_issue_does_not_hide_other_identity_controls():
     result = ThreatAnalyzer().analyze_from_text(HEALTHCARE_TEMPLATE, use_local_slm=False)
     findings = {finding.id: finding for finding in result.threats}
 
     assert findings['CTX-FHIR-001'].category == 'Spoofing'
     assert findings['CTX-FHIR-001'].tier == 'Potential'
     assert findings['CTX-FHIR-001'].confidence == 'Medium'
-    assert 'CTX-SESSION-001' not in findings
-    assert 'CTX-OAUTH-001' not in findings
+    # Token timeout does not answer Redis authentication or refresh-token
+    # rotation. Sharing Spoofing is not enough to make these duplicates.
+    assert findings['CTX-SESSION-001'].tier == 'Potential'
+    assert findings['CTX-OAUTH-001'].tier == 'Potential'
 
     assert len(result.system_model['public_entry_points']) == 1
     assert len(result.system_model['boundary_crossings']) == 0

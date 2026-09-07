@@ -1,0 +1,1472 @@
+[
+  {
+    "id": "PRO-WEB-SSRF-CONTROL",
+    "title": "Outbound request destination validation absent",
+    "description": "Untrusted URLs can target private services and metadata endpoints.",
+    "resource_type": [
+      "API",
+      "Service"
+    ],
+    "stride_category": "Information Disclosure",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-918"
+    ],
+    "owasp_top_10": [
+      "A10:2021"
+    ],
+    "nist_800_53": [
+      "SC-7"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "ssrf_protection",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "ssrf_protection"
+    ],
+    "mitigation": "Validate schemes and resolved destinations, reject private/link-local ranges, and revalidate redirects.",
+    "verification": "Try controlled private, loopback and redirect destinations; confirm requests are rejected.",
+    "version": "1.0.0",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05",
+    "source": "Aegis evidence-scoped control catalog",
+    "references": [
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "web",
+      "ssrf_protection"
+    ],
+    "preconditions": [
+      "The affected component explicitly states ssrf_protection is absent."
+    ]
+  },
+  {
+    "id": "PRO-WEB-REQUEST-BOUNDS",
+    "title": "Request body size enforcement absent",
+    "description": "Oversized payloads consume parser memory before application validation.",
+    "resource_type": [
+      "API",
+      "API Gateway"
+    ],
+    "stride_category": "Denial of Service",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-770"
+    ],
+    "owasp_top_10": [
+      "A04:2021"
+    ],
+    "nist_800_53": [
+      "SC-5"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "request_size_limit",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "request_size_limit"
+    ],
+    "mitigation": "Enforce body limits at ingress and application parsers, including decompressed size.",
+    "verification": "Submit bounded test payloads above the configured limit and verify early rejection.",
+    "version": "1.0.0",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05",
+    "source": "Aegis evidence-scoped control catalog",
+    "references": [
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "web",
+      "request_size_limit"
+    ],
+    "preconditions": [
+      "The affected component explicitly states request_size_limit is absent."
+    ]
+  },
+  {
+    "id": "PRO-IDENTITY-ISSUER",
+    "title": "JWT issuer validation absent",
+    "description": "A validly signed token from a different issuer can be accepted.",
+    "resource_type": [
+      "API",
+      "Service"
+    ],
+    "stride_category": "Spoofing",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-287"
+    ],
+    "owasp_top_10": [
+      "A07:2021"
+    ],
+    "nist_800_53": [
+      "IA-5"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "jwt_issuer_validation",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "jwt_issuer_validation"
+    ],
+    "mitigation": "Allowlist issuers and associate each issuer with its trusted signing keys.",
+    "verification": "Reject a token signed by a different issuer even when its signature is otherwise valid.",
+    "version": "1.0.0",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05",
+    "source": "Aegis evidence-scoped control catalog",
+    "references": [
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "identity",
+      "jwt_issuer_validation"
+    ],
+    "preconditions": [
+      "The affected component explicitly states jwt_issuer_validation is absent."
+    ]
+  },
+  {
+    "id": "PRO-IDENTITY-AUDIENCE",
+    "title": "JWT audience validation absent",
+    "description": "Tokens intended for another resource can be replayed against this API.",
+    "resource_type": [
+      "API",
+      "Service"
+    ],
+    "stride_category": "Spoofing",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-287"
+    ],
+    "owasp_top_10": [
+      "A07:2021"
+    ],
+    "nist_800_53": [
+      "IA-5"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "jwt_audience_validation",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "jwt_audience_validation"
+    ],
+    "mitigation": "Validate audience and token type at the resource server.",
+    "verification": "Reject a token for another audience using an authorized negative test.",
+    "version": "1.0.0",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05",
+    "source": "Aegis evidence-scoped control catalog",
+    "references": [
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "identity",
+      "jwt_audience_validation"
+    ],
+    "preconditions": [
+      "The affected component explicitly states jwt_audience_validation is absent."
+    ]
+  },
+  {
+    "id": "PRO-IDENTITY-LINKING",
+    "title": "Account linking identity verification absent",
+    "description": "An attacker links an external identity to another person's account.",
+    "resource_type": [
+      "Identity Provider",
+      "API"
+    ],
+    "stride_category": "Spoofing",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-287"
+    ],
+    "owasp_top_10": [
+      "A07:2021"
+    ],
+    "nist_800_53": [
+      "IA-2"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "account_linking_verification",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "account_linking_verification"
+    ],
+    "mitigation": "Require recent authentication and verified ownership of both identities before linking.",
+    "verification": "Attempt linking with an unverified external email and mismatched account ownership.",
+    "version": "1.0.0",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05",
+    "source": "Aegis evidence-scoped control catalog",
+    "references": [
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "identity",
+      "account_linking_verification"
+    ],
+    "preconditions": [
+      "The affected component explicitly states account_linking_verification is absent."
+    ]
+  },
+  {
+    "id": "PRO-SAAS-RESOURCE-SCOPE",
+    "title": "Tenant-bound resource authorization absent",
+    "description": "A supplied tenant identifier selects another tenant's records.",
+    "resource_type": [
+      "API",
+      "Service",
+      "Database"
+    ],
+    "stride_category": "Elevation of Privilege",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-639"
+    ],
+    "owasp_top_10": [
+      "A01:2021"
+    ],
+    "nist_800_53": [
+      "AC-3"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "tenant_isolation",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "tenant_isolation"
+    ],
+    "mitigation": "Derive tenant scope from authenticated claims and enforce it before query execution.",
+    "verification": "Use two test tenants and prove identifiers, caches and exports cannot cross scopes.",
+    "version": "1.0.0",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05",
+    "source": "Aegis evidence-scoped control catalog",
+    "references": [
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "saas",
+      "tenant_isolation"
+    ],
+    "preconditions": [
+      "The affected component explicitly states tenant_isolation is absent."
+    ]
+  },
+  {
+    "id": "PRO-AUDIT-INTEGRITY",
+    "title": "Audit records lack tamper protection",
+    "description": "A privileged actor can alter evidence of sensitive actions.",
+    "resource_type": [
+      "API",
+      "Service",
+      "Database",
+      "Monitoring"
+    ],
+    "stride_category": "Repudiation",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-778"
+    ],
+    "owasp_top_10": [
+      "A09:2021"
+    ],
+    "nist_800_53": [
+      "AU-9"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "log_integrity",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "log_integrity"
+    ],
+    "mitigation": "Separate audit-write and delete permissions and use independently retained append-only records.",
+    "verification": "Attempt log modification using the workload identity and verify independent retention.",
+    "version": "1.0.0",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05",
+    "source": "Aegis evidence-scoped control catalog",
+    "references": [
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "audit",
+      "log_integrity"
+    ],
+    "preconditions": [
+      "The affected component explicitly states log_integrity is absent."
+    ]
+  },
+  {
+    "id": "PRO-AUDIT-ATTRIBUTION",
+    "title": "Audit events lack actor attribution",
+    "description": "Actions cannot be attributed to the initiating user and tenant.",
+    "resource_type": [
+      "API",
+      "Service",
+      "Identity Provider"
+    ],
+    "stride_category": "Repudiation",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-778"
+    ],
+    "owasp_top_10": [
+      "A09:2021"
+    ],
+    "nist_800_53": [
+      "AU-3"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "audit_identity_binding",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "audit_identity_binding"
+    ],
+    "mitigation": "Record authenticated actor, tenant, action, target, outcome and correlation ID.",
+    "verification": "Check a delegated action retains both initiating user and executing workload identities.",
+    "version": "1.0.0",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05",
+    "source": "Aegis evidence-scoped control catalog",
+    "references": [
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "audit",
+      "audit_identity_binding"
+    ],
+    "preconditions": [
+      "The affected component explicitly states audit_identity_binding is absent."
+    ]
+  },
+  {
+    "id": "PRO-AUDIT-DELETION",
+    "title": "Data deletion lacks audit evidence",
+    "description": "Destructive data operations cannot be reconstructed.",
+    "resource_type": [
+      "Database",
+      "Object Storage",
+      "Service"
+    ],
+    "stride_category": "Repudiation",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-778"
+    ],
+    "owasp_top_10": [
+      "A09:2021"
+    ],
+    "nist_800_53": [
+      "AU-12"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "deletion_auditing",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "deletion_auditing"
+    ],
+    "mitigation": "Record authorized deletion requests and their completion without retaining deleted sensitive content.",
+    "verification": "Delete a disposable test record and trace actor, scope, approval and completion.",
+    "version": "1.0.0",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05",
+    "source": "Aegis evidence-scoped control catalog",
+    "references": [
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "audit",
+      "deletion_auditing"
+    ],
+    "preconditions": [
+      "The affected component explicitly states deletion_auditing is absent."
+    ]
+  },
+  {
+    "id": "PRO-AUDIT-ADMIN",
+    "title": "Administrative actions are not audited",
+    "description": "Privilege changes and support impersonation escape accountable review.",
+    "resource_type": [
+      "API",
+      "Service",
+      "Identity Provider"
+    ],
+    "stride_category": "Repudiation",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-778"
+    ],
+    "owasp_top_10": [
+      "A09:2021"
+    ],
+    "nist_800_53": [
+      "AU-2"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "administrative_auditing",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "administrative_auditing"
+    ],
+    "mitigation": "Audit role changes, impersonation, recovery and configuration changes in a protected stream.",
+    "verification": "Perform a test role change and verify actor, target, before/after and outcome.",
+    "version": "1.0.0",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05",
+    "source": "Aegis evidence-scoped control catalog",
+    "references": [
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "audit",
+      "administrative_auditing"
+    ],
+    "preconditions": [
+      "The affected component explicitly states administrative_auditing is absent."
+    ]
+  },
+  {
+    "id": "PRO-AUDIT-AGENT",
+    "title": "Consequential agent actions are not audited",
+    "description": "Tool actions cannot be tied to a user, approval or exact arguments.",
+    "resource_type": [
+      "ML Service",
+      "MCP Server"
+    ],
+    "stride_category": "Repudiation",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-778"
+    ],
+    "owasp_top_10": [
+      "A09:2021"
+    ],
+    "nist_800_53": [
+      "AU-3"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "tool_call_auditing",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "tool_call_auditing"
+    ],
+    "mitigation": "Log bounded tool-call metadata with actor, tenant, decision and redacted arguments.",
+    "verification": "Trace a test action from user request through approval to tool result.",
+    "version": "1.0.0",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05",
+    "source": "Aegis evidence-scoped control catalog",
+    "references": [
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "audit",
+      "tool_call_auditing"
+    ],
+    "preconditions": [
+      "The affected component explicitly states tool_call_auditing is absent."
+    ]
+  },
+  {
+    "id": "PRO-PAYMENT-REPLAY",
+    "title": "Payment event replay protection absent",
+    "description": "Repeated valid signed events can repeat payment or entitlement transitions.",
+    "resource_type": [
+      "API",
+      "Service"
+    ],
+    "stride_category": "Tampering",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-294"
+    ],
+    "owasp_top_10": [
+      "A07:2021"
+    ],
+    "nist_800_53": [
+      "SC-23"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "replay_protection",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "replay_protection"
+    ],
+    "mitigation": "Verify event signatures and freshness, and atomically persist processed event IDs.",
+    "verification": "Replay the same test event concurrently and verify one state transition.",
+    "version": "1.0.0",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05",
+    "source": "Aegis evidence-scoped control catalog",
+    "references": [
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "payment",
+      "replay_protection"
+    ],
+    "preconditions": [
+      "The affected component explicitly states replay_protection is absent."
+    ]
+  },
+  {
+    "id": "PRO-PAYMENT-IDEMPOTENCY",
+    "title": "Payment operation idempotency absent",
+    "description": "Concurrent retries can duplicate a charge, refund or fulfillment action.",
+    "resource_type": [
+      "API",
+      "Service"
+    ],
+    "stride_category": "Tampering",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-362"
+    ],
+    "owasp_top_10": [
+      "A04:2021"
+    ],
+    "nist_800_53": [
+      "SI-10"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "idempotency_enforced",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "idempotency_enforced"
+    ],
+    "mitigation": "Bind idempotency keys to tenant and operation with atomic result persistence.",
+    "verification": "Race two identical requests and verify a single operation and stable response.",
+    "version": "1.0.0",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05",
+    "source": "Aegis evidence-scoped control catalog",
+    "references": [
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "payment",
+      "idempotency_enforced"
+    ],
+    "preconditions": [
+      "The affected component explicitly states idempotency_enforced is absent."
+    ]
+  },
+  {
+    "id": "PRO-PAYMENT-AMOUNT",
+    "title": "Server-side payment amount binding absent",
+    "description": "Client-supplied totals or currencies alter the amount authorized for an order.",
+    "resource_type": [
+      "API",
+      "Service"
+    ],
+    "stride_category": "Tampering",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-602"
+    ],
+    "owasp_top_10": [
+      "A04:2021"
+    ],
+    "nist_800_53": [
+      "SI-10"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "payment_amount_binding",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "payment_amount_binding"
+    ],
+    "mitigation": "Calculate amount and currency server side and bind the provider payment to the stored order.",
+    "verification": "Change client amount, currency and order ID and confirm server-side rejection.",
+    "version": "1.0.0",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05",
+    "source": "Aegis evidence-scoped control catalog",
+    "references": [
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "payment",
+      "payment_amount_binding"
+    ],
+    "preconditions": [
+      "The affected component explicitly states payment_amount_binding is absent."
+    ]
+  },
+  {
+    "id": "PRO-PAYMENT-REFUND-AUDIT",
+    "title": "Refund decisions lack an audit trail",
+    "description": "Refund changes cannot be attributed to the approver and payment.",
+    "resource_type": [
+      "API",
+      "Service"
+    ],
+    "stride_category": "Repudiation",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-778"
+    ],
+    "owasp_top_10": [
+      "A09:2021"
+    ],
+    "nist_800_53": [
+      "AU-3"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "refund_auditing",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "refund_auditing"
+    ],
+    "mitigation": "Record actor, approval, original payment, amount, outcome and provider reference.",
+    "verification": "Trace an approved test refund and a denied refund attempt end to end.",
+    "version": "1.0.0",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05",
+    "source": "Aegis evidence-scoped control catalog",
+    "references": [
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "payment",
+      "refund_auditing"
+    ],
+    "preconditions": [
+      "The affected component explicitly states refund_auditing is absent."
+    ]
+  },
+  {
+    "id": "PRO-HEALTH-CONSENT",
+    "title": "Patient consent enforcement absent",
+    "description": "A valid partner identity accesses records outside the patient's authorized purpose.",
+    "resource_type": [
+      "API",
+      "Service"
+    ],
+    "stride_category": "Elevation of Privilege",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-862"
+    ],
+    "owasp_top_10": [
+      "A01:2021"
+    ],
+    "nist_800_53": [
+      "AC-3"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "consent_enforcement",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "consent_enforcement"
+    ],
+    "mitigation": "Enforce patient, purpose, partner and consent constraints at record access.",
+    "verification": "Reject a validly authenticated request after test consent is revoked.",
+    "version": "1.0.0",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05",
+    "source": "Aegis evidence-scoped control catalog",
+    "references": [
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "health",
+      "consent_enforcement"
+    ],
+    "preconditions": [
+      "The affected component explicitly states consent_enforcement is absent."
+    ]
+  },
+  {
+    "id": "PRO-HEALTH-EMERGENCY-AUDIT",
+    "title": "Emergency access lacks dedicated auditing",
+    "description": "Exceptional access to patient records bypasses normal accountability.",
+    "resource_type": [
+      "API",
+      "Service",
+      "Identity Provider"
+    ],
+    "stride_category": "Repudiation",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-778"
+    ],
+    "owasp_top_10": [
+      "A09:2021"
+    ],
+    "nist_800_53": [
+      "AU-6"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "emergency_access_auditing",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "emergency_access_auditing"
+    ],
+    "mitigation": "Require a reason, limit duration, alert reviewers and retain protected emergency-access events.",
+    "verification": "Exercise break-glass access in a test environment and verify review evidence.",
+    "version": "1.0.0",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05",
+    "source": "Aegis evidence-scoped control catalog",
+    "references": [
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "health",
+      "emergency_access_auditing"
+    ],
+    "preconditions": [
+      "The affected component explicitly states emergency_access_auditing is absent."
+    ]
+  },
+  {
+    "id": "PRO-HEALTH-EXPORT",
+    "title": "Bulk data export authorization absent",
+    "description": "Bulk export exposes more records than the caller is authorized to read.",
+    "resource_type": [
+      "API",
+      "Service"
+    ],
+    "stride_category": "Information Disclosure",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-862"
+    ],
+    "owasp_top_10": [
+      "A01:2021"
+    ],
+    "nist_800_53": [
+      "AC-3"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "export_authorization",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "export_authorization"
+    ],
+    "mitigation": "Authorize export scope at creation and download and bind jobs to user and tenant.",
+    "verification": "Attempt exporting another tenant's or patient's data using a valid low-privilege account.",
+    "version": "1.0.0",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05",
+    "source": "Aegis evidence-scoped control catalog",
+    "references": [
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "health",
+      "export_authorization"
+    ],
+    "preconditions": [
+      "The affected component explicitly states export_authorization is absent."
+    ]
+  },
+  {
+    "id": "PRO-AGENT-APPROVAL",
+    "title": "Consequential actions lack human approval enforcement",
+    "description": "An agent performs consequential operations without a server-verified approval.",
+    "resource_type": [
+      "ML Service",
+      "MCP Server",
+      "Service"
+    ],
+    "stride_category": "Elevation of Privilege",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-862"
+    ],
+    "owasp_top_10": [
+      "A01:2021"
+    ],
+    "nist_800_53": [
+      "AC-3"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "human_approval",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "human_approval"
+    ],
+    "mitigation": "Bind approval to actor, tenant, action and exact arguments, and reject expired or changed requests.",
+    "verification": "Replay approval with changed arguments and verify rejection before tool execution.",
+    "version": "1.0.0",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05",
+    "source": "Aegis evidence-scoped control catalog",
+    "references": [
+      "https://genai.owasp.org/llm-top-10/"
+    ],
+    "tags": [
+      "agent",
+      "human_approval"
+    ],
+    "preconditions": [
+      "The affected component explicitly states human_approval is absent."
+    ]
+  },
+  {
+    "id": "PRO-AGENT-TOOL-AUTHZ",
+    "title": "Tool invocation authorization absent",
+    "description": "Model-selected arguments request tools or resources beyond the user's grants.",
+    "resource_type": [
+      "ML Service",
+      "MCP Server"
+    ],
+    "stride_category": "Elevation of Privilege",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-862"
+    ],
+    "owasp_top_10": [
+      "A01:2021"
+    ],
+    "nist_800_53": [
+      "AC-3"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "tool_authorization",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "tool_authorization"
+    ],
+    "mitigation": "Enforce per-tool resource authorization outside the model using the user's effective identity.",
+    "verification": "Use an allowed tool against a disallowed test resource and verify denial.",
+    "version": "1.0.0",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05",
+    "source": "Aegis evidence-scoped control catalog",
+    "references": [
+      "https://genai.owasp.org/llm-top-10/"
+    ],
+    "tags": [
+      "agent",
+      "tool_authorization"
+    ],
+    "preconditions": [
+      "The affected component explicitly states tool_authorization is absent."
+    ]
+  },
+  {
+    "id": "PRO-AGENT-MEMORY",
+    "title": "Agent memory tenant isolation absent",
+    "description": "Persisted context crosses user or tenant boundaries.",
+    "resource_type": [
+      "ML Service",
+      "MCP Server"
+    ],
+    "stride_category": "Information Disclosure",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-639"
+    ],
+    "owasp_top_10": [
+      "A01:2021"
+    ],
+    "nist_800_53": [
+      "AC-4"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "memory_isolation",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "memory_isolation"
+    ],
+    "mitigation": "Partition memory by authenticated tenant and user with access checks on every read and write.",
+    "verification": "Verify two test tenants cannot retrieve or overwrite each other's memory.",
+    "version": "1.0.0",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05",
+    "source": "Aegis evidence-scoped control catalog",
+    "references": [
+      "https://genai.owasp.org/llm-top-10/"
+    ],
+    "tags": [
+      "agent",
+      "memory_isolation"
+    ],
+    "preconditions": [
+      "The affected component explicitly states memory_isolation is absent."
+    ]
+  },
+  {
+    "id": "PRO-AGENT-CONTEXT",
+    "title": "Untrusted retrieval content is not isolated",
+    "description": "Retrieved instructions influence privileged tool decisions.",
+    "resource_type": [
+      "ML Service"
+    ],
+    "stride_category": "Tampering",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-74"
+    ],
+    "owasp_top_10": [
+      "A03:2021"
+    ],
+    "nist_800_53": [
+      "SI-10"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "untrusted_context_separation",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "untrusted_context_separation"
+    ],
+    "mitigation": "Treat retrieval as data and independently authorize outputs and tool calls.",
+    "verification": "Include a benign adversarial instruction in a test document and verify no unauthorized action.",
+    "version": "1.0.0",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05",
+    "source": "Aegis evidence-scoped control catalog",
+    "references": [
+      "https://genai.owasp.org/llm-top-10/"
+    ],
+    "tags": [
+      "agent",
+      "untrusted_context_separation"
+    ],
+    "preconditions": [
+      "The affected component explicitly states untrusted_context_separation is absent."
+    ]
+  },
+  {
+    "id": "PRO-AGENT-EGRESS",
+    "title": "Agent outbound destinations are unrestricted",
+    "description": "A tool can send retrieved sensitive content to attacker-controlled destinations.",
+    "resource_type": [
+      "ML Service",
+      "MCP Server"
+    ],
+    "stride_category": "Information Disclosure",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-918"
+    ],
+    "owasp_top_10": [
+      "A10:2021"
+    ],
+    "nist_800_53": [
+      "SC-7"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "egress_allowlist",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "egress_allowlist"
+    ],
+    "mitigation": "Restrict tool destinations and enforce data-aware approval before external transmission.",
+    "verification": "Attempt sending synthetic sensitive data to an unapproved test destination.",
+    "version": "1.0.0",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05",
+    "source": "Aegis evidence-scoped control catalog",
+    "references": [
+      "https://genai.owasp.org/llm-top-10/"
+    ],
+    "tags": [
+      "agent",
+      "egress_allowlist"
+    ],
+    "preconditions": [
+      "The affected component explicitly states egress_allowlist is absent."
+    ]
+  },
+  {
+    "id": "PRO-CLOUD-IMDS",
+    "title": "Instance metadata token enforcement absent",
+    "description": "Tokenless metadata access increases SSRF credential exposure.",
+    "resource_type": [
+      "Compute"
+    ],
+    "stride_category": "Information Disclosure",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-918"
+    ],
+    "owasp_top_10": [
+      "A10:2021"
+    ],
+    "nist_800_53": [
+      "SC-7"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "imdsv2_required",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "imdsv2_required"
+    ],
+    "mitigation": "Require IMDSv2 and restrict metadata access and hop limits.",
+    "verification": "Inspect effective instance metadata options and reject tokenless test requests.",
+    "version": "1.0.0",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05",
+    "source": "Aegis evidence-scoped control catalog",
+    "references": [
+      "https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic.html"
+    ],
+    "cloud_platform": [
+      "AWS"
+    ],
+    "tags": [
+      "cloud",
+      "imdsv2_required"
+    ],
+    "preconditions": [
+      "The affected component explicitly states imdsv2_required is absent."
+    ]
+  },
+  {
+    "id": "PRO-CLOUD-KMS-SCOPE",
+    "title": "Key policy principal restriction absent",
+    "description": "Key-use privileges extend beyond the intended workload boundary.",
+    "resource_type": [
+      "Secrets Manager"
+    ],
+    "stride_category": "Elevation of Privilege",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-284"
+    ],
+    "owasp_top_10": [
+      "A01:2021"
+    ],
+    "nist_800_53": [
+      "AC-3"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "key_policy_restriction",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "key_policy_restriction"
+    ],
+    "mitigation": "Constrain key policy and grants by exact principals, use and encryption context.",
+    "verification": "Test decrypt with an unauthorized role and with an incorrect encryption context.",
+    "version": "1.0.0",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05",
+    "source": "Aegis evidence-scoped control catalog",
+    "references": [
+      "https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic.html"
+    ],
+    "cloud_platform": [
+      "AWS"
+    ],
+    "tags": [
+      "cloud",
+      "key_policy_restriction"
+    ],
+    "preconditions": [
+      "The affected component explicitly states key_policy_restriction is absent."
+    ]
+  },
+  {
+    "id": "PRO-CLOUD-FEDERATION",
+    "title": "Workload federation subject restriction absent",
+    "description": "A token from another repository or workload can assume the trusted identity.",
+    "resource_type": [
+      "Identity Provider",
+      "Service"
+    ],
+    "stride_category": "Spoofing",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-287"
+    ],
+    "owasp_top_10": [
+      "A07:2021"
+    ],
+    "nist_800_53": [
+      "IA-2"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "workload_federation_restriction",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "workload_federation_restriction"
+    ],
+    "mitigation": "Bind issuer, audience and subject to the intended workload and deployment environment.",
+    "verification": "Reject a token from a different repository, branch or workload subject.",
+    "version": "1.0.0",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05",
+    "source": "Aegis evidence-scoped control catalog",
+    "references": [
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "cloud",
+      "workload_federation_restriction"
+    ],
+    "preconditions": [
+      "The affected component explicitly states workload_federation_restriction is absent."
+    ]
+  },
+  {
+    "id": "PRO-RECOVERY-VERIFICATION",
+    "title": "Backup recovery is not tested",
+    "description": "Stored backups may not restore within the required recovery objective.",
+    "resource_type": [
+      "Database",
+      "Backup",
+      "Object Storage"
+    ],
+    "stride_category": "Denial of Service",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-693"
+    ],
+    "owasp_top_10": [
+      "A04:2021"
+    ],
+    "nist_800_53": [
+      "CP-4"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "backup_restore_testing",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "backup_restore_testing"
+    ],
+    "mitigation": "Test isolated restores, key availability and recovery time against agreed objectives.",
+    "verification": "Restore a representative test backup and verify integrity, access and recovery time.",
+    "version": "1.0.0",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05",
+    "source": "Aegis evidence-scoped control catalog",
+    "references": [
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "recovery",
+      "backup_restore_testing"
+    ],
+    "preconditions": [
+      "The affected component explicitly states backup_restore_testing is absent."
+    ]
+  }
+]

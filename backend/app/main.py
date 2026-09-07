@@ -15,8 +15,14 @@ from pydantic import BaseModel, Field, field_validator
 from .engine.analyzer import ThreatAnalyzer
 from .models import AnalysisResult, Component, SystemArchitecture
 from .services.document_ingestion import extract_documents
+from .services.model_review import ModelReviewRequest, prepare_model
 from .services.llm_analyzer import LLMAnalyzer
 from .services.llm_providers import provider_public_info, supported_provider_ids
+from .engine.retrieval_quality import (
+    RetrievalCalibrator,
+    RetrievalFeedbackStore,
+    retrieval_monitor,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -114,10 +120,28 @@ class AnalyzeRequest(BaseModel):
         return v
 
 
+class FindingFeedbackRequest(BaseModel):
+    project_name: str = Field(..., min_length=1, max_length=200)
+    finding_id: str = Field(..., min_length=1, max_length=200)
+    decision: str = Field(..., pattern="^(accepted|false_positive|mitigated|reclassified)$")
+    query: str = Field(default="", max_length=4000)
+    retrieval_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    stride_category: Optional[str] = Field(default=None, max_length=80)
+    security_domains: list[str] = Field(default_factory=list, max_length=20)
+    finding: Dict = Field(default_factory=dict)
+    corrected_rule_id: Optional[str] = Field(default=None, max_length=200)
+    reviewer_note: str = Field(default="", max_length=2000)
+
+
+class FeedbackApprovalRequest(BaseModel):
+    feedback_id: str = Field(..., min_length=1, max_length=100)
+    approved_by: str = Field(..., min_length=2, max_length=200)
+
+
 class IaCAnalyzeRequest(BaseModel):
     project_name: str = Field(..., min_length=1, max_length=200, description="Name of the project")
-    iac_content: str = Field(..., min_length=10, description="Raw content of Docker Compose, Kubernetes, Terraform, or CloudFormation")
-    format_hint: str = Field(default='auto', description="Hint for parser: auto, docker-compose, kubernetes, terraform, or cloudformation")
+    iac_content: str = Field(..., min_length=10, description="Raw infrastructure or pipeline definition")
+    format_hint: str = Field(default='auto', description="Optional IaC format hint")
     analysis_mode: str = Field(default="standard", description="Analysis mode: fast, standard, or deep")
     
     @field_validator('project_name')
@@ -130,7 +154,7 @@ class IaCAnalyzeRequest(BaseModel):
     @field_validator('format_hint')
     @classmethod
     def validate_format_hint(cls, v):
-        if v not in ['auto', 'docker-compose', 'kubernetes', 'terraform', 'cloudformation']:
+        if v not in ['auto', 'docker-compose', 'kubernetes', 'helm', 'helm-values', 'kustomize', 'terraform', 'terraform-plan', 'cloudformation', 'arm', 'bicep', 'pulumi', 'ci']:
             return 'auto'
         return v
 
@@ -280,8 +304,11 @@ async def _run_analysis(work: Callable[[], T], operation: str) -> T:
     streaming client. The timeout releases the caller; the worker thread cannot
     be interrupted, so it finishes in the background rather than being killed.
     """
+    from .services.analysis_workers import AnalysisBusy, analysis_workers
     try:
-        return await asyncio.wait_for(asyncio.to_thread(work), timeout=ANALYSIS_TIMEOUT_SECONDS)
+        return await analysis_workers.run(work, timeout=ANALYSIS_TIMEOUT_SECONDS)
+    except AnalysisBusy as exc:
+        raise HTTPException(status_code=503, detail=str(exc), headers={"Retry-After": "5"}) from exc
     except asyncio.TimeoutError:
         logger.warning("%s exceeded %ss", operation, ANALYSIS_TIMEOUT_SECONDS)
         raise HTTPException(
@@ -341,6 +368,7 @@ def _build_diff_summary(previous: Optional[AnalysisResult], current: AnalysisRes
     )
 
     severity_changes = []
+    finding_score_changes = []
     for threat_id in sorted(previous_ids & current_ids):
         previous_threat = previous_threats[threat_id]
         current_threat = current_threats[threat_id]
@@ -353,14 +381,44 @@ def _build_diff_summary(previous: Optional[AnalysisResult], current: AnalysisRes
                 "from_tier": previous_threat.tier,
                 "to_tier": current_threat.tier,
             })
+        factor_changes = {}
+        factor_keys = set(previous_threat.risk_factors or {}) | set(current_threat.risk_factors or {})
+        for key in sorted(factor_keys):
+            old_value = (previous_threat.risk_factors or {}).get(key)
+            new_value = (current_threat.risk_factors or {}).get(key)
+            if old_value != new_value:
+                factor_changes[key] = {"from": old_value, "to": new_value}
+        if previous_threat.risk_score != current_threat.risk_score or factor_changes:
+            finding_score_changes.append({
+                "id": threat_id,
+                "title": current_threat.title,
+                "from_score": previous_threat.risk_score,
+                "to_score": current_threat.risk_score,
+                "delta": (current_threat.risk_score or 0) - (previous_threat.risk_score or 0),
+                "factor_changes": factor_changes,
+            })
 
-    if not any((new_ids, resolved_ids, severity_changes, added_components, removed_components,
+    score_delta_explanation = []
+    if new_ids:
+        score_delta_explanation.append(f"{len(new_ids)} new finding(s) entered the risk register.")
+    if resolved_ids:
+        score_delta_explanation.append(f"{len(resolved_ids)} previous finding(s) are no longer present.")
+    if severity_changes:
+        score_delta_explanation.append(f"{len(severity_changes)} finding(s) changed severity or evidence tier.")
+    if finding_score_changes:
+        score_delta_explanation.append(f"{len(finding_score_changes)} retained finding(s) changed score inputs or score.")
+    if not score_delta_explanation and score_delta:
+        score_delta_explanation.append("The aggregate score changed because architecture coverage or score weighting changed.")
+
+    if not any((new_ids, resolved_ids, severity_changes, finding_score_changes, added_components, removed_components,
                 score_delta, component_delta, flow_delta)):
         return {
             "compared_to_project": previous.project_name,
             "new_threats": [],
             "resolved_threats": [],
             "severity_changes": [],
+            "finding_score_changes": [],
+            "score_delta_explanation": [],
             "added_components": [],
             "removed_components": [],
             "score_delta": 0,
@@ -389,6 +447,8 @@ def _build_diff_summary(previous: Optional[AnalysisResult], current: AnalysisRes
             for threat_id in resolved_ids
         ],
         "severity_changes": severity_changes,
+        "finding_score_changes": finding_score_changes,
+        "score_delta_explanation": score_delta_explanation,
         "added_components": added_components,
         "removed_components": removed_components,
         "score_delta": score_delta,
@@ -460,6 +520,66 @@ def _analyze_text_payload(
     return result
 
 
+@app.post("/model-review/sources")
+async def review_sources(files: list[UploadFile] = File(...)):
+    """Extract once; retain the source text and extraction warnings in the draft."""
+    try:
+        from .engine.parser import ArchitectureParser
+        text, documents = await extract_documents(files, max_files=MAX_UPLOAD_FILES, max_total_bytes=MAX_UPLOAD_TOTAL_BYTES)
+        bodies = ArchitectureParser._analysis_sources(text)
+        return {'sources': [
+            {'id': uuid.uuid4().hex, 'name': doc['filename'], 'kind': doc['type'],
+             'text': '\n\n'.join(item['body'] for item in bodies if item['document'] == doc['filename']),
+             'included': True, 'environment': doc.get('environment') or 'unspecified',
+             'version': doc.get('document_version') or '', 'metadata': doc}
+            for doc in documents
+        ]}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise _failure(exc, 'Source extraction')
+
+
+@app.post("/model-review/prepare")
+async def review_prepare(request: Request, payload: ModelReviewRequest):
+    try:
+        return await _run_analysis(lambda: prepare_model(payload), 'Model preparation')
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _failure(exc, 'Model preparation')
+
+
+@app.post("/model-review/analyze", response_model=AnalysisResult)
+async def review_analyze(request: Request, payload: ModelReviewRequest):
+    try:
+        analyzer = get_shared_analyzer(request)
+
+        def execute():
+            prepared = prepare_model(payload)
+            architecture = SystemArchitecture.model_validate(prepared['architecture'])
+            if not architecture.components:
+                raise ValueError('No components were modeled; correct the input before analyzing.')
+            result = analyzer.analyze(architecture, payload.project_name,
+                use_local_slm=payload.use_local_slm, analysis_mode=payload.analysis_mode,
+                domain_profile=payload.domain_profile)
+            result.engine_status['input_review'] = prepared['readiness']
+            # Diffs are computed against the client's explicit immutable revision,
+            # never another user's most recent result sharing the project name.
+            result.diff_summary = None
+            return result
+
+        return await _run_analysis(execute, 'Reviewed model analysis')
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _failure(exc, 'Reviewed model analysis')
+
+
 @app.post("/analyze", response_model=AnalysisResult)
 async def analyze(request: Request, payload: AnalyzeRequest):
     """
@@ -501,6 +621,8 @@ async def analyze(request: Request, payload: AnalyzeRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        if isinstance(e, HTTPException):
+            raise
         raise _failure(e, "Analysis")
 
 
@@ -603,6 +725,8 @@ async def analyze_documents(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        if isinstance(e, HTTPException):
+            raise
         raise _failure(e, "Document analysis")
 
 
@@ -613,34 +737,95 @@ async def analyze_iac(request: Request, payload: IaCAnalyzeRequest):
     """
     try:
         from .engine.iac_parser import IaCParser
+
+        cache_key = _stable_cache_key(
+            "iac", payload.project_name, payload.analysis_mode,
+            payload.format_hint, payload.iac_content,
+        )
+        cached = _analysis_cache.get(cache_key)
+        if cached is not None:
+            return cached
         
-        # 1. Parse IaC into SystemArchitecture
-        parser = IaCParser()
-        system_architecture = parser.parse(payload.iac_content, payload.format_hint)
-        
-        if not system_architecture.components and not (system_architecture.metadata or {}).get("iac_findings"):
-            raise ValueError("No supported resources or services found in the provided IaC file.")
-            
-        # 2. Run analysis
         analyzer = get_shared_analyzer(request)
         previous_result = _latest_analysis_by_project.get(payload.project_name)
-        result = await _run_analysis(
-            lambda: analyzer.analyze(
-                system_architecture,
-                payload.project_name,
-                analysis_mode=payload.analysis_mode,
-            ),
-            "IaC analysis",
-        )
+
+        def work():
+            architecture = IaCParser().parse(payload.iac_content, payload.format_hint)
+            if not architecture.components and not (architecture.metadata or {}).get("iac_findings"):
+                raise ValueError("No supported resources or services found in the provided IaC file.")
+            return analyzer.analyze(architecture, payload.project_name, analysis_mode=payload.analysis_mode)
+
+        result = await _run_analysis(work, "IaC analysis")
         result.diff_summary = _build_diff_summary(previous_result, result)
         _latest_analysis_by_project[payload.project_name] = result
+        _analysis_cache.set(cache_key, result)
         
         return result
         
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        if isinstance(e, HTTPException):
+            raise
         raise _failure(e, "IaC analysis")
+
+
+@app.post("/analyze-iac-project", response_model=AnalysisResult)
+async def analyze_iac_project(
+    request: Request,
+    project_name: str = Form(...),
+    analysis_mode: str = Form("standard"),
+    files: list[UploadFile] = File(...),
+):
+    """Analyze a related set of IaC, deployment, and CI files as one project."""
+    try:
+        from .engine.iac_parser import IaCParser
+
+        project_name = _sanitize_project_name(project_name)
+        analysis_mode = _normalize_analysis_mode(analysis_mode)
+        if not files or len(files) > MAX_UPLOAD_FILES:
+            raise ValueError(f"Provide between 1 and {MAX_UPLOAD_FILES} IaC files.")
+
+        inputs = []
+        total_bytes = 0
+        for upload in files:
+            raw = await upload.read()
+            total_bytes += len(raw)
+            if total_bytes > MAX_UPLOAD_TOTAL_BYTES:
+                raise ValueError(f"IaC project exceeds the {MAX_UPLOAD_TOTAL_BYTES // (1024 * 1024)} MB upload limit.")
+            inputs.append({
+                "filename": upload.filename or f"input-{len(inputs) + 1}",
+                "content": raw.decode("utf-8", errors="replace"),
+            })
+
+        cache_key = _stable_cache_key(
+            "iac-project", project_name, analysis_mode,
+            tuple((item["filename"], item["content"]) for item in inputs),
+        )
+        cached = _analysis_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        analyzer = get_shared_analyzer(request)
+        previous_result = _latest_analysis_by_project.get(project_name)
+
+        def work():
+            architecture = IaCParser().parse_project(inputs)
+            if not architecture.components and not (architecture.metadata or {}).get("iac_findings"):
+                raise ValueError("No supported resources or pipeline definitions were found in the uploaded project.")
+            return analyzer.analyze(architecture, project_name, analysis_mode=analysis_mode)
+
+        result = await _run_analysis(work, "IaC project analysis")
+        result.diff_summary = _build_diff_summary(previous_result, result)
+        _latest_analysis_by_project[project_name] = result
+        _analysis_cache.set(cache_key, result)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise
+        raise _failure(e, "IaC project analysis")
 
 
 @app.post("/analyze-code", response_model=AnalysisResult)
@@ -708,7 +893,41 @@ def health_check():
         "status": "ok",
         "version": "2.3.1",
         "environment": ENVIRONMENT,
-        "ml_features": ml_features
+        "ml_features": ml_features,
+        "retrieval": retrieval_monitor.snapshot(),
+    }
+
+
+@app.post("/feedback/findings")
+def record_finding_feedback(payload: FindingFeedbackRequest):
+    """Record a review decision without automatically trusting it for training."""
+    try:
+        return RetrievalFeedbackStore().record(payload.model_dump(mode="json"))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/admin/retrieval-feedback/approve")
+def approve_retrieval_feedback(request: Request, payload: FeedbackApprovalRequest):
+    """Approve one reviewed decision and build candidate thresholds, without activating them."""
+    _require_admin(request)
+    store = RetrievalFeedbackStore()
+    try:
+        approval = store.approve(payload.feedback_id, payload.approved_by)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="feedback record not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    calibration = RetrievalCalibrator().fit(store.approved_training_records())
+    return {"approval": approval, "calibration": calibration}
+
+
+@app.get("/admin/retrieval-metrics")
+def retrieval_metrics(request: Request):
+    _require_admin(request)
+    return {
+        **retrieval_monitor.snapshot(),
+        "review_feedback": RetrievalFeedbackStore().summary(),
     }
 
 
@@ -825,6 +1044,10 @@ async def websocket_analyze(websocket: WebSocket):
 
 @app.post("/analyze-with-llm", response_model=AnalysisResult)
 async def analyze_with_llm(request: Request, payload: LLMAnalyzeRequest):
+    return await _run_analysis(lambda: _analyze_with_llm_sync(request, payload), "AI-enhanced analysis")
+
+
+def _analyze_with_llm_sync(request: Request, payload: LLMAnalyzeRequest):
     """
     Analyze architecture with LLM enhancement (OpenAI, Claude, or Gemini).
     

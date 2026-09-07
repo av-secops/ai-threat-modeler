@@ -99,7 +99,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       - name: Install dependencies
@@ -108,11 +108,29 @@ jobs:
       - name: Run linter
         run: npm run lint
 
+      - name: Run model workspace and manifest tests
+        run: node --test scripts/model-workspace.test.mjs scripts/startup.test.mjs
+
       - name: Build
         run: npm run build
 
       - name: Check build size
         run: du -sh dist/
+
+  windows-launcher:
+    name: Windows Launcher Tests
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+
+      - name: Test launcher arguments and working directories
+        run: node --test scripts/startup.test.mjs
 
   diagram-render:
     name: Diagram Render Check
@@ -133,7 +151,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       - name: Install dependencies
@@ -160,7 +178,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       # Compiled on Linux because that is where the artifact is installed; a

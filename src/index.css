@@ -51,14 +51,33 @@
   color-scheme: dark;
 }
 
-/* Mermaid's dark theme uses pale connectors, but the generated trust zones are white. */
+/* Generated diagrams contain inline light-theme styles; override the canvas as a unit. */
+.dark .architecture-diagram svg .cluster rect {
+  fill: #18202c !important;
+  stroke: #8897aa !important;
+}
+
+.dark .architecture-diagram svg .node :is(rect, circle, ellipse, polygon, path) {
+  fill: #252f3d !important;
+}
+
+.dark .architecture-diagram svg :is(.nodeLabel, .cluster-label, .edgeLabel, text) {
+  color: #f1f5f9 !important;
+  fill: #f1f5f9 !important;
+}
+
+.dark .architecture-diagram svg .edgeLabel p {
+  background-color: #18202c !important;
+  color: #f1f5f9 !important;
+}
+
 .dark .architecture-diagram svg .flowchart-link {
-  stroke: #2563eb !important;
+  stroke: #7dd3fc !important;
 }
 
 .dark .architecture-diagram svg marker .arrowMarkerPath {
-  fill: #2563eb !important;
-  stroke: #2563eb !important;
+  fill: #7dd3fc !important;
+  stroke: #7dd3fc !important;
 }
 
 @keyframes slide-in-right {

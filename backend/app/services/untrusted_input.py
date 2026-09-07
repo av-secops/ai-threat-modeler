@@ -68,6 +68,8 @@ def scan(text: str, source: str = "architecture input") -> List[Dict[str, Any]]:
     detections: List[Dict[str, Any]] = []
     for item, expression in _COMPILED:
         for match in expression.finditer(text or ""):
+            if item["id"] == "prompt-scaffold" and _structured_key_match(text, match.start(), match.end()):
+                continue
             detections.append({
                 "id": item["id"],
                 "description": item["description"],
@@ -77,6 +79,16 @@ def scan(text: str, source: str = "architecture input") -> List[Dict[str, Any]]:
             })
             break  # one detection per pattern is enough to warrant review
     return detections
+
+
+def _structured_key_match(text: str, start: int, end: int) -> bool:
+    """Do not mistake ordinary YAML keys such as ``system: Claims API`` for chat roles."""
+    line_start = (text or "").rfind("\n", 0, start) + 1
+    line_end = (text or "").find("\n", end)
+    if line_end < 0:
+        line_end = len(text or "")
+    line = (text or "")[line_start:line_end]
+    return bool(re.match(r"^\s*(?:system|assistant|user)\s*:\s+\S", line, re.IGNORECASE))
 
 
 def fence(text: str) -> str:

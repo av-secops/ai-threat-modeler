@@ -1,36 +1,58 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Clock, Trash2, Eye, GitCompare, X, ArrowUpRight, ArrowDownRight, Minus } from 'lucide-react';
 import { loadAnalyses, deleteAnalysis, clearAllAnalyses } from '../utils/storage';
 import { useToast } from '../hooks/useToast';
+import { loadWorkspaces, deleteWorkspace, clearWorkspaces } from '../utils/modelWorkspace';
+
+async function historyEntries() {
+    const workspaces = await loadWorkspaces();
+    return [...loadAnalyses(), ...workspaces.map((w) => ({ id: w.id, workspaceId: w.id, projectName: w.projectName,
+        timestamp: w.updatedAt, data: w.revisions.at(-1)?.data || null, revisionCount: w.revisions.length }))]
+        .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+}
 
 const AnalysisHistory = ({ onLoadAnalysis }) => {
     const [analyses, setAnalyses] = useState(() => loadAnalyses());
     const [compareMode, setCompareMode] = useState(false);
     const [selectedForCompare, setSelectedForCompare] = useState([]);
     const [comparison, setComparison] = useState(null);
+    const [historyError, setHistoryError] = useState('');
     const toast = useToast();
 
-    const refresh = () => setAnalyses(loadAnalyses());
+    useEffect(() => {
+        let cancelled = false;
+        historyEntries().then((entries) => { if (!cancelled) setAnalyses(entries); }).catch(() => { if (!cancelled) setHistoryError('Saved workspaces could not be loaded.'); });
+        return () => { cancelled = true; };
+    }, []);
 
-    const handleDelete = (id) => {
-        deleteAnalysis(id);
-        refresh();
-        toast.success('Analysis deleted');
+    const refresh = async () => setAnalyses(await historyEntries());
+
+    const handleDelete = async (id) => {
+        try {
+            if (analyses.find((a) => a.id === id)?.workspaceId) await deleteWorkspace(id);
+            else deleteAnalysis(id);
+            await refresh();
+            toast.success('Analysis deleted');
+        } catch { toast.error('The analysis could not be deleted.'); }
     };
 
-    const handleClearAll = () => {
+    const handleClearAll = async () => {
         if (window.confirm('Delete all saved analyses? This cannot be undone.')) {
-            clearAllAnalyses();
-            refresh();
-            toast.success('All analyses cleared');
+            try {
+                await clearWorkspaces();
+                clearAllAnalyses();
+                await refresh();
+                toast.success('All analyses cleared');
+            } catch { toast.error('Saved analyses could not be cleared.'); }
         }
     };
 
     const handleLoad = (analysis) => {
-        onLoadAnalysis(analysis.data, analysis.projectName);
+        onLoadAnalysis(analysis.data, analysis.projectName, analysis);
     };
 
     const toggleCompareSelect = (analysis) => {
+        if (!analysis.data) { toast.error('Analyze this draft before comparing reports.'); return; }
         if (selectedForCompare.find(a => a.id === analysis.id)) {
             setSelectedForCompare(selectedForCompare.filter(a => a.id !== analysis.id));
         } else if (selectedForCompare.length < 2) {
@@ -40,7 +62,7 @@ const AnalysisHistory = ({ onLoadAnalysis }) => {
 
     const runComparison = () => {
         if (selectedForCompare.length !== 2) return;
-        const [older, newer] = selectedForCompare.sort((a, b) => a.id - b.id);
+        const [older, newer] = [...selectedForCompare].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
         const olderThreats = older.data?.threats || [];
         const newerThreats = newer.data?.threats || [];
@@ -127,7 +149,8 @@ const AnalysisHistory = ({ onLoadAnalysis }) => {
                 {/* Resolved threats */}
                 {comparison.resolvedThreats.length > 0 && (
                     <div className="mb-4">
-                        <h3 className="font-bold text-green-600 dark:text-green-400 mb-2">✅ Resolved Threats ({comparison.resolvedThreats.length})</h3>
+                        <h3 className="font-bold text-brand-600 dark:text-brand-300 mb-2">No longer reported ({comparison.resolvedThreats.length})</h3>
+                        <p className="mb-2 text-xs text-brand-500 dark:text-brand-400">Absence from a later report does not verify remediation.</p>
                         <div className="space-y-1">
                             {comparison.resolvedThreats.map((t, i) => (
                                 <div key={i} className="text-sm p-2 bg-green-50 dark:bg-green-900/20 rounded border-l-3 border-green-500 dark:text-brand-300 line-through opacity-75">
@@ -163,6 +186,7 @@ const AnalysisHistory = ({ onLoadAnalysis }) => {
                 <h2 className="mb-2 text-2xl font-semibold text-brand-950 dark:text-white">Analysis History</h2>
                 <p className="text-sm leading-6 text-brand-600 dark:text-brand-400">Browse, load, or compare your past threat analyses.</p>
             </div>
+            {historyError && <p role="alert" className="my-3 text-sm text-red-600 dark:text-red-300">{historyError}</p>}
 
             {analyses.length === 0 ? (
                 <div className="text-center py-16 text-brand-500 dark:text-brand-400">
@@ -219,6 +243,7 @@ const AnalysisHistory = ({ onLoadAnalysis }) => {
                                     <div className="flex items-center justify-between">
                                         <div>
                                             <h3 className="font-bold text-brand-900 dark:text-white">{analysis.projectName}</h3>
+                                            {analysis.workspaceId && <p className="mt-1 text-xs text-brand-500 dark:text-brand-400">{analysis.revisionCount ? `${analysis.revisionCount} report revision${analysis.revisionCount === 1 ? '' : 's'} and a saved draft` : 'Saved architecture draft'}</p>}
                                             <div className="flex items-center gap-3 mt-1 text-sm text-brand-500 dark:text-brand-400">
                                                 <span className="flex items-center gap-1">
                                                     <Clock className="w-3.5 h-3.5" />

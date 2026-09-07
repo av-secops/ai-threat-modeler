@@ -18,6 +18,19 @@ version: technology-catalog-1.0
 # type decides which threat packs apply and which STRIDE cells are assessed, so
 # put a technology under what it *is* to an attacker, not under who sells it.
 technologies:
+  Native Service:
+    - native service
+    - native parser
+    - c++ service
+    - c++ backend
+    - unsafe ffi
+
+  Mobile App:
+    - mobile application
+    - android app
+    - ios app
+    - flutter app
+
   API:
     - express
     - fastapi
@@ -42,6 +55,11 @@ technologies:
     - adonisjs
     - node.js
     - nodejs
+    - asp.net core
+    - asp.net
+    - dotnet api
+    - micronaut
+    - quarkus
 
   API Gateway:
     - llm gateway
@@ -61,15 +79,30 @@ technologies:
     - github actions
     - argo cd
     - argocd
+    - jenkins
+    - gitlab ci
+    - circleci
+    - buildkite
+    - teamcity
+    - tekton
+    - azure pipelines
+    - aws codebuild
 
   Compute:
     - ec2
+    - azure virtual machine
+    - azure vm
+    - google compute engine
 
   Container Platform:
     - eks
 
   Container Registry:
     - ecr
+    - azure container registry
+    - google artifact registry
+    - jfrog artifactory
+    - harbor registry
 
   DNS:
     - route 53
@@ -129,6 +162,9 @@ technologies:
     - azure ad
     - entra id
     - firebase auth
+    - ping identity
+    - pingfederate
+    - adfs
 
   IoT Device:
     - iot device
@@ -214,6 +250,7 @@ technologies:
     - lambda
     - cloud function
     - azure function
+    - cloud run
 
   Threat Detection:
     - guardduty

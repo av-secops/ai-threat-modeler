@@ -55,29 +55,195 @@ class ArchitectureParser:
         re.IGNORECASE,
     )
 
-    def _architecture_only_text(self, text: str) -> str:
-        lines = []
-        in_non_architecture_section = False
+    _DOCUMENT_HEADER = re.compile(r'^\s*Document:\s*(?P<name>\S.*?)\s*$', re.IGNORECASE)
+    _DOCUMENT_TYPE = re.compile(r'^\s*Type:\s*(?P<value>\S.*?)\s*$', re.IGNORECASE)
+    _DOCUMENT_ROLE = re.compile(r'^\s*Role:\s*(?P<value>\S.*?)\s*$', re.IGNORECASE)
+    _DOCUMENT_CONTENT = re.compile(r'^\s*Content:\s*$', re.IGNORECASE)
+
+    @classmethod
+    def _analysis_sources(cls, text: str) -> List[Dict[str, Any]]:
+        """Return source bodies without the upload transport headers."""
+        sources: List[Dict[str, Any]] = []
+        current = {
+            'document': 'architecture input', 'type': 'text',
+            'role': 'user_context', 'lines': [],
+        }
+        header_run = False
+        wrapped = False
+
+        def flush() -> None:
+            body = '\n'.join(current['lines']).strip()
+            if body:
+                sources.append({**current, 'body': body})
+
         for raw_line in (text or '').splitlines():
-            section_match = re.search(
-                r'(?i)(?:^|\s)(?:known issues?|exclusions?|out of scope|assumptions?)\s*:',
-                raw_line,
-            )
-            if section_match:
-                prefix = raw_line[:section_match.start()].strip()
-                if prefix:
-                    lines.append(prefix)
-                in_non_architecture_section = True
+            stripped = raw_line.strip()
+            if re.fullmatch(r'User Context:', stripped, re.IGNORECASE):
+                flush()
+                current = {
+                    'document': 'architecture input', 'type': 'text',
+                    'role': 'user_context', 'lines': [],
+                }
+                header_run = False
+                wrapped = True
                 continue
-            if in_non_architecture_section:
-                # A new labelled section resumes architecture parsing unless it
-                # is another security-context section.
-                if re.match(r'^\s*[A-Za-z][A-Za-z /-]{2,}:\s*$', raw_line):
-                    in_non_architecture_section = False
-                else:
+
+            document = cls._DOCUMENT_HEADER.match(stripped)
+            if document:
+                flush()
+                current = {
+                    'document': document.group('name'), 'type': 'text',
+                    'role': 'source_design', 'lines': [],
+                }
+                header_run = True
+                wrapped = True
+                continue
+
+            if header_run:
+                type_match = cls._DOCUMENT_TYPE.match(stripped)
+                role_match = cls._DOCUMENT_ROLE.match(stripped)
+                if type_match:
+                    current['type'] = type_match.group('value').lower()
                     continue
-            lines.append(raw_line)
-        return '\n'.join(lines)
+                if role_match:
+                    current['role'] = role_match.group('value').lower()
+                    continue
+                if cls._DOCUMENT_CONTENT.match(stripped):
+                    header_run = False
+                    continue
+                header_run = False
+
+            # The joiner and Markdown horizontal rules are not design facts.
+            if wrapped and re.fullmatch(r'-{3,}', stripped):
+                continue
+            current['lines'].append(raw_line)
+
+        flush()
+        return sources or [{
+            'document': 'architecture input', 'type': 'text',
+            'role': 'user_context', 'body': text or '',
+        }]
+
+    @staticmethod
+    def _without_structured_paths(body: str) -> str:
+        return re.split(r'(?im)^\s*\[Structured paths\]\s*$', body or '', maxsplit=1)[0].strip()
+
+    def _embedded_iac_architectures(self, text: str) -> List[Dict[str, Any]]:
+        """Parse recognized structured uploads with the deterministic IaC engine."""
+        from .iac_parser import IaCParser
+
+        parsed = []
+        for source in self._analysis_sources(text):
+            if source.get('role') == 'reference_report':
+                continue
+            if source.get('type') not in {'yaml', 'yml', 'json', 'tf', 'hcl'}:
+                continue
+            content = self._without_structured_paths(str(source.get('body') or ''))
+            try:
+                hint = 'terraform' if source.get('type') in {'tf', 'hcl'} else 'auto'
+                architecture = IaCParser().parse(content, hint)
+            except ValueError:
+                continue
+            parsed.append({**source, 'content': content, 'architecture': architecture})
+        return parsed
+
+    @staticmethod
+    def _merge_embedded_iac(
+        components: Dict[str, Component], flows: List[DataFlow],
+        sources: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        findings: List[Dict[str, Any]] = []
+        existing_flows = {(flow.source_id, flow.target_id, flow.protocol.lower()) for flow in flows}
+
+        for source in sources:
+            architecture = source['architecture']
+            document = str(source.get('document') or 'uploaded IaC')
+            id_map: Dict[str, str] = {}
+            for incoming in architecture.components or []:
+                component_id = incoming.id
+                incumbent = components.get(component_id)
+                if incumbent is not None and incumbent.type != incoming.type:
+                    prefix = re.sub(r'[^a-z0-9]+', '_', document.lower()).strip('_')
+                    component_id = f"iac_{prefix}_{incoming.id}"
+                    incumbent = components.get(component_id)
+                id_map[incoming.id] = component_id
+
+                incoming_props = dict(incoming.properties or {})
+                incoming_props.update({
+                    'authoritative': True,
+                    'source_document': document,
+                    'extraction_method': 'iac_parser',
+                })
+                evidence = {
+                    'source_type': 'iac', 'source_ref': incoming.id, 'line': None,
+                    'statement': f"IaC resource {incoming.id} is declared in {document}.",
+                    'confidence': 'High', 'document': document,
+                }
+                if incumbent is None:
+                    incoming.id = component_id
+                    incoming.properties = incoming_props
+                    incoming.evidence = incoming.evidence or [evidence]
+                    incoming.confidence = 'High'
+                    components[component_id] = incoming
+                else:
+                    incumbent.properties = {**incoming_props, **(incumbent.properties or {})}
+                    if evidence not in (incumbent.evidence or []):
+                        incumbent.evidence = [*(incumbent.evidence or []), evidence]
+
+            for incoming in architecture.flows or []:
+                incoming.source_id = id_map.get(incoming.source_id, incoming.source_id)
+                incoming.target_id = id_map.get(incoming.target_id, incoming.target_id)
+                key = (incoming.source_id, incoming.target_id, incoming.protocol.lower())
+                if key in existing_flows:
+                    continue
+                incoming.assumed = bool(incoming.assumed or (incoming.properties or {}).get('assumed'))
+                incoming.properties = {
+                    **(incoming.properties or {}), 'authoritative': True,
+                    'source_document': document, 'extraction_method': 'iac_parser',
+                }
+                flows.append(incoming)
+                existing_flows.add(key)
+
+            for finding in (architecture.metadata or {}).get('iac_findings', []):
+                copied = dict(finding)
+                copied['resource_id'] = id_map.get(
+                    str(finding.get('resource_id') or ''), finding.get('resource_id')
+                )
+                copied['source_document'] = document
+                findings.append(copied)
+        return findings
+
+    def _architecture_only_text(
+        self, text: str, excluded_documents: Optional[set[str]] = None,
+    ) -> str:
+        architecture_sources = []
+        excluded = excluded_documents or set()
+        for source in self._analysis_sources(text):
+            if source.get('role') == 'reference_report' or source.get('document') in excluded:
+                continue
+            lines = []
+            in_non_architecture_section = False
+            for raw_line in str(source.get('body') or '').splitlines():
+                section_match = re.search(
+                    r'(?i)(?:^|\s)(?:known issues?|exclusions?|out of scope|assumptions?)\s*:',
+                    raw_line,
+                )
+                if section_match:
+                    prefix = raw_line[:section_match.start()].strip()
+                    if prefix:
+                        lines.append(prefix)
+                    in_non_architecture_section = True
+                    continue
+                if in_non_architecture_section:
+                    if re.match(r'^\s*[A-Za-z][A-Za-z /-]{2,}:\s*$', raw_line):
+                        in_non_architecture_section = False
+                    else:
+                        continue
+                lines.append(raw_line)
+            body = '\n'.join(lines).strip()
+            if body:
+                architecture_sources.append(body)
+        return prose.architecture_assertions('\n\n'.join(architecture_sources))
 
     def _known_issue_metadata(self, issue_text: str, rule_id: str, category: str,
                               severity: str, control: str, mitigation: str,
@@ -234,7 +400,17 @@ class ArchitectureParser:
         for pattern, component_id, name, component_type in declarations:
             if any(component.type == component_type for component in components.values()):
                 continue
-            statement = next((line.strip() for line in lines if re.search(pattern, line, re.IGNORECASE)), '')
+            statement = ''
+            for line in lines:
+                matches = list(re.finditer(pattern, line, re.IGNORECASE))
+                if component_type == 'API':
+                    matches = [match for match in matches if not (
+                        re.search(r'\b(?:logs?|audits?|monitors?|records?)\s+$', line[:match.start()], re.IGNORECASE)
+                        and re.match(r'\s+(?:calls?|requests?|events?)\b', line[match.end():], re.IGNORECASE)
+                    )]
+                if matches:
+                    statement = line.strip()
+                    break
             if not statement:
                 continue
             props = self._infer_properties(statement.lower(), component_type)
@@ -448,6 +624,19 @@ class ArchitectureParser:
         ]
         if concrete_api_ids:
             for generic_id in ('api', 'rest_api'):
+                if generic_id == 'rest_api' and re.search(r'\brest\s+api\b', text, re.IGNORECASE):
+                    represented = any(
+                        re.search(
+                            re.escape(alias) + r'\s+(?:\w+\s+){0,2}rest\s+api\b',
+                            text, re.IGNORECASE,
+                        )
+                        or re.search(r'\brest\s+api\b', alias, re.IGNORECASE)
+                        for cid in concrete_api_ids
+                        for alias in (components[cid].name, str(components[cid].properties.get('technology') or ''))
+                        if alias
+                    )
+                    if not represented:
+                        continue
                 components.pop(generic_id, None)
 
         # A named peer of the same type supersedes the generic noun it was
@@ -931,7 +1120,13 @@ class ArchitectureParser:
             # inserting a row above it would renumber the rest of the table and
             # every finding and reviewer note below the insertion would detach
             # from the thing it was written about.
-            component_id = self._stable_component_id(name, source_id, components)
+            declared_id = (record.get('canonical_id') or record.get('component_id') or '').strip()
+            if declared_id:
+                declared_id = re.sub(r'_+', '_', re.sub(r'[^a-zA-Z0-9_-]+', '_', declared_id)).strip('_').lower()
+            component_id = (
+                declared_id if declared_id and declared_id not in components
+                else self._stable_component_id(name, source_id, components)
+            )
             technology = record.get('technology', '').strip()
             responsibility = (record.get('responsibility_data') or record.get('responsibility') or '').strip()
             # A document the analyzer emitted states the type and control state it
@@ -1293,31 +1488,39 @@ class ArchitectureParser:
         Extract and classify known security issues from description.
         Looks for 'Known Issues:' section and parses each issue.
         """
-        source = text or ''
-        section = re.search(r'(?i)(?:^|\s)known issues?\s*:', source)
-        if not section:
-            return []
-
-        issue_block = source[section.end():]
-        next_section = re.search(
-            r'(?im)^\s*(?:exclusions?|out of scope|assumptions?|components?|data flows?|architecture)\s*:',
-            issue_block,
-        )
-        if next_section:
-            issue_block = issue_block[:next_section.start()]
-
         entries = []
-        for raw_line in issue_block.splitlines() or [issue_block]:
-            line = re.sub(r'^\s*(?:[-*]|\d+[.)])\s*', '', raw_line).strip()
-            if not line:
-                continue
-            entries.extend(
-                item.strip(' \t.;')
-                for item in re.split(r'(?<=[.!?;])\s+(?=[A-Z0-9])', line)
-                if item.strip(' \t.;')
-            )
+        for source in self._analysis_sources(text):
+            body = str(source.get('body') or '')
+            matches = list(re.finditer(r'(?im)(?:^|\s)known issues?\s*:', body))
+            for index, section in enumerate(matches):
+                end = matches[index + 1].start() if index + 1 < len(matches) else len(body)
+                issue_block = body[section.end():end]
+                next_section = re.search(
+                    r'(?im)^\s*(?:exclusions?|out of scope|assumptions?|components?|data flows?|architecture|mitigations?|controls?|notes?)\s*:',
+                    issue_block,
+                )
+                if next_section:
+                    issue_block = issue_block[:next_section.start()]
 
-        classified = [self._classify_known_issue(entry) for entry in entries]
+                for raw_line in issue_block.splitlines() or [issue_block]:
+                    line = re.sub(r'^\s*(?:[-*]|\d+[.)])\s*', '', raw_line).strip()
+                    if not line:
+                        continue
+                    entries.extend(
+                        item.strip(' \t.;')
+                        for item in re.split(r'(?<=[.!?;])\s+(?=[A-Z0-9])', line)
+                        if item.strip(' \t.;')
+                    )
+
+        deduplicated = []
+        seen = set()
+        for entry in entries:
+            key = re.sub(r'[^a-z0-9]+', ' ', entry.lower()).strip()
+            if key and key not in seen:
+                seen.add(key)
+                deduplicated.append(entry)
+
+        classified = [self._classify_known_issue(entry) for entry in deduplicated]
 
         # Unclassified issues each need their own identifier so that reviewers can
         # track them individually instead of seeing one repeated id.
@@ -1354,11 +1557,25 @@ class ArchitectureParser:
             issue['classification_status'] = 'classified'
 
     def _link_known_issues_to_components(
-        self, issues: List[Dict[str, Any]], components: Dict[str, Component]
+        self, issues: List[Dict[str, Any]], components: Dict[str, Component], flows: Optional[List[DataFlow]] = None
     ) -> List[Dict[str, Any]]:
         """Resolve issue scope from literal component evidence and capabilities."""
         for issue in issues:
             rule_id = str(issue.get('suggested_threat_id') or '').upper()
+            if issue.get('control') == 'webhook_signature_validation':
+                receivers = []
+                for flow in flows or []:
+                    source, target = components.get(flow.source_id), components.get(flow.target_id)
+                    evidence_text = str(flow.evidence) + str(flow.properties)
+                    if (not flow.assumed and source and target
+                            and source.type in {'Payment Processor', 'External Entity', 'External Service'}
+                            and target.type in {'API', 'Service', 'API Gateway'}
+                            and 'webhook' in evidence_text.lower()):
+                        receivers.append(target.id)
+                if receivers:
+                    issue['component_hints'] = list(dict.fromkeys(receivers))
+                    issue['component_resolution'] = 'stated_callback_receiver'
+                    continue
             issue_resources = {
                 'AWS-IAM-CONFUSED-DEPUTY': ('vendor_cross_account_role', 'Vendor Cross-account Role', 'IAM'),
                 'AUTH-SAML-RESPONSE-BINDING': ('saml_identity', 'SAML Identity Integration', 'Identity Provider'),
@@ -2046,7 +2263,10 @@ class ArchitectureParser:
             return self._known_issue_metadata(issue_text, 'AUTH-SESSION-REVOCATION-001', 'Spoofing', 'high', 'session_revocation',
                 'Revoke Redis sessions and refresh tokens when credentials change; reject JWTs issued before passwordChangedAt or with an obsolete session version.',
                 ['A07:2021 Identification and Authentication Failures'], ['CWE-613'])
-        if any(token in issue_lower for token in ('tenant id', 'tenant_id', 'caller-supplied tenant', 'caller supplied tenant')) and any(token in issue_lower for token in ('invoice', 'order', 'record', 'load', 'api')):
+        if any(token in issue_lower for token in ('tenant id', 'tenant_id', 'caller-supplied tenant', 'caller supplied tenant')) and any(token in issue_lower for token in (
+            'invoice', 'order', 'record', 'load', 'api', 'request header',
+            'ownership validation', 'server-side ownership', 'server side ownership',
+        )):
             return self._known_issue_metadata(issue_text, 'API-BOLA-TENANT-CONTROL-001', 'Elevation of Privilege', 'critical', 'server_derived_tenant_scope',
                 'Derive tenant scope from the authenticated identity on the server and enforce tenant ownership in every query and object lookup.',
                 ['API1:2023 Broken Object Level Authorization'], ['CWE-639', 'CWE-862'])
@@ -2314,7 +2534,7 @@ class ArchitectureParser:
             [], [], affected_stride_categories=[],
         )
     
-    def _assign_stated_weaknesses(self, text: str, components: Dict[str, Component]) -> None:
+    def _assign_stated_weaknesses(self, text: str, components: Dict[str, Component]) -> List[Dict[str, Any]]:
         """Attribute weaknesses stated in prose to the component they describe.
 
         A weakness written in ordinary prose carries the same authority as one
@@ -2330,6 +2550,7 @@ class ArchitectureParser:
         components and blaming the portal for all three would be wrong.
         """
         index = alias_index(components)
+        unscoped: List[Dict[str, Any]] = []
         for component in components.values():
             component.properties.setdefault('stated_weaknesses', [])
 
@@ -2341,6 +2562,16 @@ class ArchitectureParser:
             # referred to by part of its name is still the one described.
             mentions = find_mentions(statement, index)
             if not mentions:
+                for rule in rules:
+                    if not any(
+                        item['rule_id'] == rule['id'] and item['statement'] == statement
+                        for item in unscoped
+                    ):
+                        unscoped.append({
+                            'rule_id': rule['id'],
+                            'control': rule['control'],
+                            'statement': statement,
+                        })
                 continue
             component = components[mentions[0][2]]
             weaknesses = component.properties['stated_weaknesses']
@@ -2352,6 +2583,7 @@ class ArchitectureParser:
                     'control': rule['control'],
                     'statement': statement,
                 })
+        return unscoped
 
     def _names_something_unmodelled(self, clause: str, components: Dict[str, Component]) -> bool:
         """True when the clause names a component-like thing the model lacks."""
@@ -2379,6 +2611,7 @@ class ArchitectureParser:
         subjects: Dict[str, Dict[str, bool]] = defaultdict(dict)
         participants: Dict[str, set] = defaultdict(set)
         general: set = set()
+        evidence_by_subject = defaultdict(lambda: defaultdict(list))
 
         for statement in control_statements.statements(text):
             mentions = find_mentions(statement.clause, index)
@@ -2393,6 +2626,9 @@ class ArchitectureParser:
             if statement.affirmed:
                 participants[statement.control].update(mention[2] for mention in mentions)
             subject = mentions[0][2]
+            record = {'state': 'present' if statement.affirmed else 'absent', 'statement': statement.clause, 'source_type': 'architecture_input'}
+            if record not in evidence_by_subject[subject][statement.control]:
+                evidence_by_subject[subject][statement.control].append(record)
             claims = subjects[statement.control]
             # A denial outranks a claim about the same component: the clause
             # that says a control is absent is the one carrying the risk.
@@ -2420,6 +2656,10 @@ class ArchitectureParser:
                     props.pop(control, None)
                     negations.discard(control)
                 props['explicit_negations'] = sorted(negations)
+        for component_id, evidence in evidence_by_subject.items():
+            props = components[component_id].properties
+            previous = props.get('control_evidence') or {}
+            props['control_evidence'] = {**previous, **dict(evidence)}
 
     def _detect_negations(self, text: str) -> Dict[str, bool]:
         """
@@ -2537,7 +2777,11 @@ class ArchitectureParser:
         if authoritative is not None:
             return authoritative
 
-        model_text = self._architecture_only_text(text)
+        embedded_iac = self._embedded_iac_architectures(text)
+        model_text = self._architecture_only_text(
+            text,
+            excluded_documents={str(item.get('document') or '') for item in embedded_iac},
+        )
         text_lower = model_text.lower()
         components: Dict[str, Component] = {}
         flows: List[DataFlow] = []
@@ -2680,6 +2924,9 @@ class ArchitectureParser:
         self._add_inferred_named_components(model_text, components)
         resolved_names = self._consolidate_component_aliases(model_text, components)
 
+        iac_flows: List[DataFlow] = []
+        iac_findings = self._merge_embedded_iac(components, iac_flows, embedded_iac)
+
         # Prefer a concrete frontend technology over generic aliases extracted
         # from the same declaration (for example React + frontend).
         generic_clients = {'frontend', 'webclient', 'client', 'spa'}
@@ -2698,6 +2945,7 @@ class ArchitectureParser:
         flows = self._infer_flows(model_text, components)
         for flow in flows:
             flow.properties.setdefault('extraction_method', 'heuristic')
+        flows.extend(iac_flows)
         
         # 7. NLP-ENHANCED: Extract additional flows using dependency parsing
         if NLP_AVAILABLE and nlp_entities:
@@ -2762,7 +3010,7 @@ class ArchitectureParser:
             for control, value in local_negations.items():
                 comp.properties[control] = value
             comp.properties['explicit_negations'] = sorted(local_negations)
-        self._assign_stated_weaknesses(model_text, components)
+        unscoped_stated_weaknesses = self._assign_stated_weaknesses(model_text, components)
         
         # 9. NLP-ENHANCED: Apply NLP-extracted security properties
         if nlp_security_props:
@@ -2836,7 +3084,7 @@ class ArchitectureParser:
         
         # 10. Parse known issues
         known_issues = self._link_known_issues_to_components(
-            self.parse_known_issues(text), components,
+            self.parse_known_issues(text), components, flows,
         )
         assumptions = self._collect_assumptions(components, flows)
         trust_boundaries = self._build_trust_boundaries(components, flows)
@@ -2855,6 +3103,18 @@ class ArchitectureParser:
                 'global_security_signals': nlp_security_props,
                 'assumptions': assumptions,
                 'resolved_names': resolved_names,
+                'iac_findings': iac_findings,
+                'unscoped_stated_weaknesses': unscoped_stated_weaknesses,
+                'embedded_iac_documents': [item.get('document') for item in embedded_iac],
+                'unresolved_references': [
+                    {**reference, 'source_document': source.get('document')}
+                    for source in embedded_iac
+                    for reference in (source['architecture'].metadata or {}).get('unresolved_references', [])
+                ],
+                'analysis_limits': list(dict.fromkeys(
+                    limitation for source in embedded_iac
+                    for limitation in (source['architecture'].metadata or {}).get('analysis_limits', [])
+                )),
                 'trust_boundaries': [boundary.model_dump() for boundary in trust_boundaries],
                 'assets': [asset.model_dump() for asset in assets],
             }

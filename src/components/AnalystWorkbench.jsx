@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Bot, Download, Layers3, ListTodo, MessageSquareQuote, Users } from 'lucide-react';
+import { Download, Layers3, ListTodo, MessageSquareQuote, Users } from 'lucide-react';
 import { clsx } from 'clsx';
-import { answerAnalysisQuestion } from '../utils/analysisCopilot';
 import { loadAnnotations, orphanedAnnotations, saveAnnotations } from '../utils/annotations';
 
 const domainTone = {
@@ -23,30 +22,29 @@ function downloadBlob(filename, content, type) {
   URL.revokeObjectURL(url);
 }
 
-export default function AnalystWorkbench({ data, projectName, reviewStates }) {
-  const [question, setQuestion] = useState('');
-  const [copilotAnswer, setCopilotAnswer] = useState(() => answerAnalysisQuestion('', data));
-  const [owners, setOwners] = useState(() => loadAnnotations(projectName).owners);
-  const [notes, setNotes] = useState(() => loadAnnotations(projectName).notes);
-  const [componentNotes, setComponentNotes] = useState(() => loadAnnotations(projectName).componentNotes);
+export default function AnalystWorkbench({ data, projectName, reviewStates, annotationScope, mode = 'assurance' }) {
+  const reviewKey = annotationScope || projectName;
+  const [owners, setOwners] = useState(() => loadAnnotations(reviewKey).owners);
+  const [notes, setNotes] = useState(() => loadAnnotations(reviewKey).notes);
+  const [componentNotes, setComponentNotes] = useState(() => loadAnnotations(reviewKey).componentNotes);
 
   // Re-analysis replaces the findings but not the review of them, so what the
   // reviewer wrote is reloaded and reattached by finding id. Adjusting during
   // render rather than in an effect keeps one project's notes from being shown
   // against another for a frame, and avoids the save effect below writing them
   // back under the new project name.
-  const [loadedProject, setLoadedProject] = useState(projectName);
-  if (projectName !== loadedProject) {
-    const stored = loadAnnotations(projectName);
-    setLoadedProject(projectName);
+  const [loadedProject, setLoadedProject] = useState(reviewKey);
+  if (reviewKey !== loadedProject) {
+    const stored = loadAnnotations(reviewKey);
+    setLoadedProject(reviewKey);
     setOwners(stored.owners);
     setNotes(stored.notes);
     setComponentNotes(stored.componentNotes);
   }
 
   useEffect(() => {
-    saveAnnotations(projectName, { owners, notes, componentNotes });
-  }, [projectName, owners, notes, componentNotes]);
+    saveAnnotations(reviewKey, { owners, notes, componentNotes });
+  }, [reviewKey, owners, notes, componentNotes]);
 
   const orphans = useMemo(
     () => orphanedAnnotations({ owners, notes }, (data.threats || []).map((threat) => threat.id)),
@@ -64,10 +62,6 @@ export default function AnalystWorkbench({ data, projectName, reviewStates }) {
       reviewState: reviewStates[threat.id] || 'open',
     }));
   }, [data.threats, notes, owners, reviewStates]);
-
-  const askCopilot = () => {
-    setCopilotAnswer(answerAnalysisQuestion(question, data));
-  };
 
   const exportActionRegister = () => {
     const headers = ['ID', 'Title', 'Severity', 'Tier', 'Review State', 'Owner', 'Note'];
@@ -98,72 +92,43 @@ export default function AnalystWorkbench({ data, projectName, reviewStates }) {
     downloadBlob(`${projectName.replace(/\s+/g, '_')}_action_register.md`, lines.join('\n'), 'text/markdown');
   };
 
-  return (
-    <section className="mt-8 grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
-      <div className="space-y-6">
-        <div className="ui-panel p-6">
-          <div className="flex items-center gap-2">
-            <Bot className="h-5 w-5 text-brand-primary" />
-            <h3 className="text-lg font-bold text-brand-950 dark:text-white">Threat modeling copilot</h3>
-          </div>
-          <p className="mt-2 text-sm leading-6 text-brand-600 dark:text-brand-400">
-            Ask about priorities, auth risks, missing detail, or what changed. This lightweight copilot answers from the current analysis state.
-          </p>
-          <div className="mt-4 flex gap-3">
-            <input
-              value={question}
-              onChange={(e) => setQuestion(e.target.value)}
-              placeholder="What should I fix first?"
-              className="input-brand flex-1 text-sm"
-            />
-            <button onClick={askCopilot} className="btn-brand whitespace-nowrap">Ask</button>
-          </div>
-          <div className="ui-subpanel mt-4">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-500 dark:text-brand-400">{copilotAnswer.title}</p>
-            <p className="mt-3 text-sm leading-7 text-brand-700 dark:text-brand-300">{copilotAnswer.answer}</p>
-            {copilotAnswer.bullets?.length > 0 && (
-              <ul className="mt-3 space-y-2 text-sm text-brand-700 dark:text-brand-300">
-                {copilotAnswer.bullets.map((bullet, index) => (
-                  <li key={index} className="rounded-lg border border-brand-200 bg-white px-3 py-2 dark:border-brand-700 dark:bg-brand-800/60">{bullet}</li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </div>
-
-        <div className="ui-panel p-6">
+  if (mode === 'architecture') {
+    return (
+      <section className="mt-6">
+        <div className="border-y border-brand-200 py-5 dark:border-brand-700">
           <div className="flex items-center gap-2">
             <Layers3 className="h-5 w-5 text-brand-primary" />
             <h3 className="text-lg font-bold text-brand-950 dark:text-white">Architecture workbench</h3>
           </div>
-          <p className="mt-2 text-sm leading-6 text-brand-600 dark:text-brand-400">
-            Review the parsed model directly. Add notes to components as you validate the generated architecture with teammates.
-          </p>
-          <div className="mt-4 grid gap-3">
-            {(data.architecture?.components || []).slice(0, 8).map((component) => (
-              <div key={component.id} className="ui-subpanel">
-                <div className="flex items-center justify-between gap-3">
+          <div className="mt-4 divide-y divide-brand-200 dark:divide-brand-700">
+            {(data.architecture?.components || []).map((component) => (
+              <details key={component.id} className="py-3">
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-3">
                   <div>
                     <p className="font-semibold text-brand-950 dark:text-white">{component.name}</p>
                     <p className="text-xs text-brand-500 dark:text-brand-400">{component.type}</p>
                   </div>
                   <span className={clsx('rounded-full px-2.5 py-1 text-[10px] font-semibold', domainTone[data.domain_context?.profile || 'general'])}>
-                    {component.properties?.trust_boundary || 'internal'}
+                    {component.properties?.trust_boundary || component.trust_level || 'unknown'}
                   </span>
-                </div>
+                </summary>
                 <textarea
+                  aria-label={`Validation note for ${component.name}`}
                   value={componentNotes[component.id] || ''}
                   onChange={(e) => setComponentNotes((prev) => ({ ...prev, [component.id]: e.target.value }))}
                   placeholder="Validation note for this component..."
                   className="input-brand mt-3 h-20 w-full resize-none text-sm"
                 />
-              </div>
+              </details>
             ))}
           </div>
         </div>
-      </div>
+      </section>
+    );
+  }
 
-      <div className="space-y-6">
+  return (
+    <section className="mt-8 grid gap-6 xl:grid-cols-2">
         <div className="ui-panel p-6">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
@@ -196,7 +161,6 @@ export default function AnalystWorkbench({ data, projectName, reviewStates }) {
             </div>
           </div>
         </div>
-
         <div className="ui-panel p-6">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
@@ -247,7 +211,6 @@ export default function AnalystWorkbench({ data, projectName, reviewStates }) {
             ))}
           </div>
         </div>
-      </div>
     </section>
   );
 }

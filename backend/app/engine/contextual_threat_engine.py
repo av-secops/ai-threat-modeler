@@ -184,16 +184,14 @@ THREAT_LIBRARY = {
 class ContextualThreatEngine:
     def __init__(self, knowledge_base=None):
         self.knowledge_base = knowledge_base
-        self._system_model = None
 
     def analyze(self, system_model) -> List[Threat]:
-        self._system_model = system_model
         components = {component.id: component for component in system_model.components or []}
         threats: List[Threat] = []
         generated_keys = set()
 
         for component in system_model.components or []:
-            threats.extend(self._analyze_component(component, generated_keys))
+            threats.extend(self._analyze_component(component, generated_keys, system_model))
 
         for flow in system_model.flows or []:
             source = components.get(flow.source_id)
@@ -207,11 +205,12 @@ class ContextualThreatEngine:
         target = component
         return self._analyze_threat(component, data_flow, asset, target, set())
 
-    def _analyze_component(self, component, generated_keys) -> List[Threat]:
+    def _analyze_component(self, component, generated_keys, system_model) -> List[Threat]:
         findings: List[Threat] = []
         props = component.properties or {}
         explicit_negations = set(props.get('explicit_negations') or [])
-        architecture_text = ((self._system_model.metadata or {}).get('architecture_text') or '').lower()
+        architecture_text = ((system_model.metadata or {}).get('architecture_text') or '').lower()
+        asset = self._match_asset_for_component(component, system_model)
         component_line = next(
             (line.strip() for line in architecture_text.splitlines() if component.name.lower() in line.lower()),
             '',
@@ -223,7 +222,7 @@ class ContextualThreatEngine:
             findings.append(self._build_threat(
                 "missing_authentication",
                 component=component,
-                asset=self._match_asset_for_component(component),
+                asset=asset,
                 flow_ref=None,
                 generated_keys=generated_keys,
                 realistic_attack_scenario=f"An attacker interacts directly with {component.name} from an untrusted boundary and bypasses identity checks to execute privileged application actions.",
@@ -239,7 +238,7 @@ class ContextualThreatEngine:
             findings.append(self._build_threat(
                 "missing_waf",
                 component=component,
-                asset=self._match_asset_for_component(component),
+                asset=asset,
                 flow_ref=None,
                 generated_keys=generated_keys,
                 realistic_attack_scenario=f"An attacker sends malicious HTTP traffic directly to {component.name}; without WAF filtering, common exploit and abuse traffic reaches application handlers.",
@@ -253,7 +252,7 @@ class ContextualThreatEngine:
             findings.append(self._build_threat(
                 "missing_input_validation",
                 component=component,
-                asset=self._match_asset_for_component(component),
+                asset=asset,
                 flow_ref=None,
                 generated_keys=generated_keys,
                 realistic_attack_scenario=f"An attacker submits crafted input to {component.name}; without a validation boundary the payload can alter queries, workflow state, or downstream service behavior.",
@@ -267,7 +266,7 @@ class ContextualThreatEngine:
             findings.append(self._build_threat(
                 "redis_missing_auth",
                 component=component,
-                asset=self._match_asset_for_component(component),
+                asset=asset,
                 flow_ref=None,
                 generated_keys=generated_keys,
                 realistic_attack_scenario=f"An attacker who reaches {component.name} can read session or cache data and tamper with cached authorization state because Redis authentication is not enforced.",
@@ -280,7 +279,7 @@ class ContextualThreatEngine:
             findings.append(self._build_threat(
                 "redis_session_auth_unknown",
                 component=component,
-                asset=self._match_asset_for_component(component),
+                asset=asset,
                 flow_ref=None,
                 generated_keys=generated_keys,
                 realistic_attack_scenario=f"If an attacker or compromised workload can reach {component.name}, weak Redis client authentication could permit session injection, fixation, or theft.",
@@ -299,7 +298,7 @@ class ContextualThreatEngine:
             findings.append(self._build_threat(
                 "fhir_partner_authentication",
                 component=component,
-                asset=self._match_asset_for_component(component),
+                asset=asset,
                 flow_ref=None,
                 generated_keys=generated_keys,
                 realistic_attack_scenario=f"A system presenting a stolen or untrusted partner identity calls {component.name} and attempts to query or modify PHI through the interoperability API.",
@@ -317,7 +316,7 @@ class ContextualThreatEngine:
             findings.append(self._build_threat(
                 "oauth_token_lifecycle_unknown",
                 component=component,
-                asset=self._match_asset_for_component(component),
+                asset=asset,
                 flow_ref=None,
                 generated_keys=generated_keys,
                 realistic_attack_scenario=f"An attacker replays a stolen access or refresh token accepted through {component.name} after the legitimate user expects the session to be invalidated.",
@@ -334,7 +333,7 @@ class ContextualThreatEngine:
             findings.append(self._build_threat(
                 "unencrypted_storage",
                 component=component,
-                asset=self._match_asset_for_component(component),
+                asset=asset,
                 flow_ref=None,
                 generated_keys=generated_keys,
                 realistic_attack_scenario=f"If {component.name} is accessed through backup compromise, host compromise, or cloud snapshot exposure, regulated records could be read in plaintext.",
@@ -350,7 +349,7 @@ class ContextualThreatEngine:
             findings.append(self._build_threat(
                 "secrets_exposure",
                 component=component,
-                asset=self._match_asset_for_component(component),
+                asset=asset,
                 flow_ref=None,
                 generated_keys=generated_keys,
                 realistic_attack_scenario=f"Credentials used by {component.name} could be recovered from deployment config, logs, or image layers and then reused against dependent systems.",
@@ -364,7 +363,7 @@ class ContextualThreatEngine:
             findings.append(self._build_threat(
                 "iam_misconfig",
                 component=component,
-                asset=self._match_asset_for_component(component),
+                asset=asset,
                 flow_ref=None,
                 generated_keys=generated_keys,
                 realistic_attack_scenario=f"After compromising {component.name}, an attacker abuses over-broad cloud permissions to enumerate or modify adjacent services.",
@@ -378,7 +377,7 @@ class ContextualThreatEngine:
             findings.append(self._build_threat(
                 "supply_chain",
                 component=component,
-                asset=self._match_asset_for_component(component),
+                asset=asset,
                 flow_ref=None,
                 generated_keys=generated_keys,
                 realistic_attack_scenario=f"A malicious dependency or container image propagates into {component.name}, granting code execution inside the runtime environment.",
@@ -397,7 +396,7 @@ class ContextualThreatEngine:
             findings.append(self._build_threat(
                 "llm_prompt_injection",
                 component=component,
-                asset=self._match_asset_for_component(component),
+                asset=asset,
                 flow_ref=None,
                 generated_keys=generated_keys,
                 realistic_attack_scenario=f"An attacker feeds crafted content into {component.name}; the model treats it as instruction-bearing context and triggers unsafe retrieval, tool usage, or data disclosure.",
@@ -487,10 +486,11 @@ class ContextualThreatEngine:
                 return asset
         return None
 
-    def _match_asset_for_component(self, component) -> Optional[object]:
-        if not component or not self._system_model:
+    @staticmethod
+    def _match_asset_for_component(component, system_model) -> Optional[object]:
+        if not component or not system_model:
             return None
-        for asset in self._system_model.assets or []:
+        for asset in system_model.assets or []:
             if asset.related_component_id == component.id:
                 return asset
         return None

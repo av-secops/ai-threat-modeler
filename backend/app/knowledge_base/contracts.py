@@ -71,6 +71,8 @@ class CanonicalThreatRule(BaseModel):
     rule_kind: Literal["deterministic", "candidate"]
     source_module: str
     references: List[str] = Field(default_factory=list)
+    framework_mappings: List[Dict[str, Any]] = Field(default_factory=list)
+    framework_mapping_issues: List[str] = Field(default_factory=list)
     raw: Dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")

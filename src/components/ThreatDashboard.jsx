@@ -1,20 +1,24 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
+    BadgeCheck,
+    BarChart3,
     Download,
     FileText,
-    Filter,
-    Search,
-    X,
+
+    LayoutDashboard,
+    Network,
+
+    ShieldAlert,
+
     Copy,
     ClipboardCheck,
     ShieldCheck,
     ZoomIn,
     ZoomOut,
     RotateCcw,
+    Pencil,
 } from 'lucide-react';
-import { generateReport } from '../utils/pdfGenerator';
 import { clsx } from 'clsx';
-import mermaid from 'mermaid';
 import RiskMatrix from './RiskMatrix';
 import StrideChart from './StrideChart';
 import ArchitectureModelEditor from './dashboard/ArchitectureModelEditor';
@@ -25,15 +29,27 @@ import {
     DetailSection,
     EmptyInsight,
     MetricCard,
-    PriorityActionCard,
     SeverityBadge,
 } from './dashboard/InsightCards';
-import { RiskDetailsModal, ThreatSection } from './dashboard/RiskRegister';
-import { insightCardBase, reviewStateMeta, severityOrder, severityTheme } from './dashboard/theme';
+import { RiskDetailsModal } from './dashboard/RiskRegister';
+import FindingsWorkspace from './dashboard/FindingsWorkspace';
+import ReportOverview from './dashboard/ReportOverview';
+import { insightCardBase, reviewStateMeta, severityOrder } from './dashboard/theme';
 import { useToast } from '../hooks/useToast';
 import { loadAnnotations, saveAnnotations } from '../utils/annotations';
-import html2canvas from 'html2canvas';
 import AnalystWorkbench from './AnalystWorkbench';
+import AnalysisCopilot from './AnalysisCopilot';
+import { recordFindingFeedback } from '../services/retrievalFeedback';
+
+const resultViews = [
+    { id: 'overview', label: 'Overview', icon: LayoutDashboard },
+    { id: 'architecture', label: 'Architecture', icon: Network },
+    { id: 'register', label: 'Risk register', icon: ShieldAlert },
+    { id: 'assurance', label: 'Assurance', icon: BadgeCheck },
+    { id: 'report', label: 'Report', icon: FileText },
+];
+
+const normalizeLabel = (value) => String(value || '').trim().toLowerCase();
 
 const resizeDiagramSvg = (svgElement, zoom) => {
     if (!svgElement?.dataset.baseWidth || !svgElement?.dataset.baseHeight) return;
@@ -43,7 +59,8 @@ const resizeDiagramSvg = (svgElement, zoom) => {
     svgElement.style.maxHeight = 'none';
 };
 
-export default function ThreatDashboard({ data, projectName, onReanalyze, isAnalyzing, darkMode = false }) {
+export default function ThreatDashboard({ data, projectName, onReanalyze, onReviewModel, onClarify, onProposeUpdate, annotationScope, isAnalyzing, darkMode = false, sidebarCollapsed = true }) {
+    const reviewKey = annotationScope || projectName;
     const mermaidRef = useRef(null);
     const diagramViewportRef = useRef(null);
     const toast = useToast();
@@ -51,112 +68,160 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, isAnal
     const [reviewStates, setReviewStates] = useState({});
     const [selectedThreat, setSelectedThreat] = useState(null);
     const [diagramZoom, setDiagramZoom] = useState(1);
+    const diagramZoomRef = useRef(1);
     const [filters, setFilters] = useState({
         severity: 'all',
         category: 'all',
         tier: 'all',
         search: '',
     });
-    const [showFilters, setShowFilters] = useState(false);
+
+    const [activeView, setActiveView] = useState('overview');
+    const [viewData, setViewData] = useState(data);
+
+    if (viewData !== data) {
+        setViewData(data);
+        setActiveView('overview');
+        setSelectedThreat(null);
+        setFilters({ severity: 'all', category: 'all', tier: 'all', search: '' });
+        setDiagramZoom(1);
+    }
 
     useEffect(() => {
+        let cancelled = false;
         const renderDiagram = async () => {
-            if (!data?.diagram || !mermaidRef.current) return;
+            if (activeView !== 'architecture' || !data?.diagram || !mermaidRef.current) return;
 
             try {
+                const { default: mermaid } = await import('mermaid');
+                if (cancelled || !mermaidRef.current) return;
                 mermaid.initialize({
                     startOnLoad: false,
                     theme: darkMode ? 'dark' : 'default',
-                    securityLevel: 'loose',
+                    securityLevel: 'strict',
                     fontFamily: 'Inter, sans-serif',
                 });
 
                 mermaidRef.current.innerHTML = '';
                 const diagramId = `mermaid-diagram-${Date.now()}`;
                 const { svg } = await mermaid.render(diagramId, data.diagram);
+                if (cancelled || !mermaidRef.current) return;
                 mermaidRef.current.innerHTML = svg;
 
                 const svgElement = mermaidRef.current.querySelector('svg');
                 if (svgElement) {
+                    if (darkMode) {
+                        // Mermaid applies generated theme styles as inline !important values.
+                        svgElement.querySelectorAll('.cluster rect').forEach((node) => {
+                            node.style.setProperty('fill', '#18202c', 'important');
+                            node.style.setProperty('stroke', '#8897aa', 'important');
+                        });
+                        svgElement.querySelectorAll('.node rect, .node circle, .node ellipse, .node polygon, .node path').forEach((node) => {
+                            node.style.setProperty('fill', '#252f3d', 'important');
+                            node.style.setProperty('stroke', node.closest('.dfdFinding') ? '#f87171' : '#cbd5e1', 'important');
+                        });
+                        svgElement.querySelectorAll('.nodeLabel, .nodeLabel *, .cluster-label, .cluster-label *, .edgeLabel, .edgeLabel *, text').forEach((node) => {
+                            node.style.setProperty('color', '#f1f5f9', 'important');
+                            node.style.setProperty('fill', '#f1f5f9', 'important');
+                        });
+                    }
                     const viewBox = (svgElement.getAttribute('viewBox') || '').split(/\s+/).map(Number);
                     const viewWidth = viewBox[2] || 900;
                     const viewHeight = viewBox[3] || 560;
-                    const fitScale = Math.min(1020 / viewWidth, 560 / viewHeight, 1);
+                    const availableWidth = Math.max(240, (diagramViewportRef.current?.clientWidth || 1020) - 48);
+                    const availableHeight = Math.max(220, (diagramViewportRef.current?.clientHeight || 480) - 48);
+                    const fitScale = Math.min(availableWidth / viewWidth, availableHeight / viewHeight, 1);
                     svgElement.dataset.baseWidth = String(Math.round(viewWidth * fitScale));
                     svgElement.dataset.baseHeight = String(Math.round(viewHeight * fitScale));
                     svgElement.removeAttribute('width');
                     svgElement.removeAttribute('height');
-                    resizeDiagramSvg(svgElement, 1);
+                    resizeDiagramSvg(svgElement, diagramZoomRef.current);
                 }
             } catch (error) {
                 console.error('Mermaid rendering error:', error);
-                mermaidRef.current.innerHTML = `
-                    <div class="text-center p-8">
-                        <p class="text-red-600 dark:text-red-400 font-semibold mb-2">Failed to render architecture diagram</p>
-                        <p class="text-sm text-gray-600 dark:text-gray-400">${error.message}</p>
-                    </div>
-                `;
+                if (!cancelled && mermaidRef.current) mermaidRef.current.textContent = 'The architecture diagram could not be rendered.';
             }
         };
 
         renderDiagram();
-    }, [data, darkMode]);
+        return () => { cancelled = true; };
+    }, [activeView, data, darkMode]);
 
     useEffect(() => {
+        diagramZoomRef.current = diagramZoom;
         resizeDiagramSvg(mermaidRef.current?.querySelector('svg'), diagramZoom);
     }, [diagramZoom]);
+
+    useEffect(() => {
+        const viewport = diagramViewportRef.current;
+        if (activeView !== 'architecture' || !viewport) return undefined;
+        const wheel = (event) => {
+            event.preventDefault();
+            setDiagramZoom((current) => Math.min(2.5, Math.max(0.5, Number((current + (event.deltaY < 0 ? 0.1 : -0.1)).toFixed(2)))));
+        };
+        let drag;
+        const down = (event) => {
+            if (event.button !== 0 || event.target.closest('button, a, input')) return;
+            drag = { x: event.clientX, y: event.clientY, left: viewport.scrollLeft, top: viewport.scrollTop };
+            viewport.setPointerCapture(event.pointerId);
+        };
+        const move = (event) => {
+            if (!drag) return;
+            viewport.scrollLeft = drag.left - (event.clientX - drag.x);
+            viewport.scrollTop = drag.top - (event.clientY - drag.y);
+        };
+        const up = () => { drag = null; };
+        viewport.addEventListener('wheel', wheel, { passive: false });
+        viewport.addEventListener('pointerdown', down);
+        viewport.addEventListener('pointermove', move);
+        viewport.addEventListener('pointerup', up);
+        viewport.addEventListener('pointercancel', up);
+        return () => {
+            viewport.removeEventListener('wheel', wheel);
+            viewport.removeEventListener('pointerdown', down);
+            viewport.removeEventListener('pointermove', move);
+            viewport.removeEventListener('pointerup', up);
+            viewport.removeEventListener('pointercancel', up);
+        };
+    }, [activeView]);
 
     useEffect(() => {
         // A reviewer's decision outranks the engine's default. Re-analysis
         // reports every finding as open again, and without this a finding
         // already accepted or marked a false positive would come back demanding
         // the same judgement after every edit to the model.
-        const stored = loadAnnotations(projectName).reviewStates;
+        const stored = loadAnnotations(reviewKey).reviewStates;
         const nextStates = {};
         (data?.threats || []).forEach((threat) => {
             nextStates[threat.id] = stored[threat.id] || threat.review_state || 'open';
         });
         queueMicrotask(() => setReviewStates(nextStates));
-    }, [data, projectName]);
+    }, [data, reviewKey]);
 
     const updateReviewState = (threatId, state) => {
         setReviewStates((prev) => {
             const next = { ...prev, [threatId]: state };
-            saveAnnotations(projectName, { reviewStates: next });
+            saveAnnotations(reviewKey, { reviewStates: next });
             return next;
         });
+        const threat = (data?.threats || []).find((item) => item.id === threatId);
+        if (threat && state !== 'open') {
+            recordFindingFeedback({ projectName, threat, decision: state }).catch((error) => {
+                console.warn('Finding feedback could not be recorded:', error);
+            });
+        }
     };
 
-    const severities = ['all', ...new Set(data?.threats?.map((t) => t.severity) || [])];
-    const categories = ['all', ...new Set(data?.threats?.map((t) => t.category) || [])];
-    const tiers = ['all', 'Confirmed', 'Potential'];
 
-    const filteredThreats = useMemo(() => {
-        return (data?.threats || []).filter((threat) => {
-            if (filters.severity !== 'all' && threat.severity !== filters.severity) return false;
-            if (filters.category !== 'all' && threat.category !== filters.category) return false;
-            if (filters.tier !== 'all' && threat.tier !== filters.tier) return false;
-            if (
-                filters.search &&
-                !`${threat.title} ${threat.description}`.toLowerCase().includes(filters.search.toLowerCase())
-            ) {
-                return false;
-            }
-            return true;
-        });
-    }, [data, filters]);
-
-    const sortedFilteredThreats = useMemo(() => [...filteredThreats].sort((a, b) => {
-        const severityDelta = (severityOrder[b.severity] || 0) - (severityOrder[a.severity] || 0);
-        if (severityDelta !== 0) return severityDelta;
-        return (b.risk_score || 0) - (a.risk_score || 0);
-    }), [filteredThreats]);
 
     if (!data) return null;
 
     const systemModel = data.system_model || {};
     const strideCoverage = data.stride_coverage || {};
     const engineStatus = data.engine_status || {};
+    const localIntelligence = engineStatus.local_intelligence || {};
+    const retrievalEngine = localIntelligence.retrieval_engine || {};
+    const knowledgeAudit = engineStatus.knowledge_base?.quality_audit || {};
     const qualityGate = engineStatus.quality_gate || {};
     const publicationBlocked = qualityGate.publication_status === 'blocked' || qualityGate.status === 'blocked';
     const publicationLabel = publicationBlocked
@@ -177,7 +242,7 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, isAnal
         : aiSecurityLens.items?.length === 2
             ? 'md:grid-cols-2'
             : 'md:grid-cols-2 xl:grid-cols-3';
-    const priorityActions = data.priority_actions || [];
+
     // The header counted follow-up questions while the body showed evidence
     // requests as well, so the two disagreed about how much was outstanding.
     const openQuestionCount = followUpQuestions.length + (evidenceRequests?.requests?.length || 0);
@@ -188,13 +253,15 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, isAnal
         return (b.risk_score || 0) - (a.risk_score || 0);
     });
 
-    const topStory = allThreatsSorted[0];
-    const confirmedThreats = (data.threats || []).filter((threat) => threat.tier === 'Confirmed');
+
+    const confirmedThreats = (data.threats || []).filter((threat) => (
+        normalizeLabel(threat.tier) === 'confirmed' && reviewStates[threat.id] !== 'false_positive'
+    ));
     const confirmedCount = confirmedThreats.length;
     // Counted across every finding, these read as a breakdown of the confirmed
     // total they sit under and so could exceed it. They describe the same set.
-    const criticalCount = confirmedThreats.filter((t) => t.severity === 'Critical').length;
-    const highCount = confirmedThreats.filter((t) => t.severity === 'High').length;
+    const criticalCount = confirmedThreats.filter((threat) => normalizeLabel(threat.severity) === 'critical').length;
+    const highCount = confirmedThreats.filter((threat) => normalizeLabel(threat.severity) === 'high').length;
     const mitigatedThreats = Object.values(reviewStates).filter((state) => state === 'mitigated' || state === 'accepted').length;
     const remediationPercent = data.threats?.length ? Math.round((mitigatedThreats / data.threats.length) * 100) : 0;
     const reviewSummary = (data.threats || []).reduce((summary, threat) => {
@@ -202,25 +269,22 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, isAnal
         summary[state] = (summary[state] || 0) + 1;
         return summary;
     }, { open: 0, mitigated: 0, accepted: 0, false_positive: 0 });
-    const hasActiveFilters = filters.severity !== 'all' || filters.category !== 'all' || filters.tier !== 'all' || filters.search !== '';
+
 
     const handleRiskMatrixClick = (impact, likelihood) => {
         setFilters((prev) => ({
             ...prev,
-            severity: impact === 'High' ? 'all' : impact,
+            severity: 'all', impact, likelihood,
         }));
-        setShowFilters(true);
-        toast.success(`Filtering by ${impact} severity x ${likelihood} likelihood`);
+        setActiveView('register');
+
+        toast.success(`Filtering by ${impact} impact and ${likelihood} likelihood`);
     };
 
     const changeDiagramZoom = (delta) => {
         setDiagramZoom((current) => Math.min(2.5, Math.max(0.5, Number((current + delta).toFixed(2)))));
     };
 
-    const handleDiagramWheel = (event) => {
-        event.preventDefault();
-        changeDiagramZoom(event.deltaY < 0 ? 0.1 : -0.1);
-    };
 
     const copyDiagramCode = async () => {
         if (!data?.diagram) return;
@@ -300,6 +364,7 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, isAnal
                 toast.error('Diagram not available');
                 return;
             }
+            const { default: html2canvas } = await import('html2canvas');
             const canvas = await html2canvas(element);
             const link = document.createElement('a');
             link.download = `${projectName.replace(/\s+/g, '_')}_architecture.png`;
@@ -317,32 +382,31 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, isAnal
             return;
         }
         try {
-            await generateReport(data, projectName);
+            const { generateReport } = await import('../utils/pdfGenerator');
+            await generateReport(data, projectName, reviewStates);
             toast.success('PDF report generated');
         } catch {
             toast.error('Failed to generate PDF report');
         }
     };
 
-    const clearFilters = () => {
-        setFilters({ severity: 'all', category: 'all', tier: 'all', search: '' });
-    };
+
 
     return (
         <div className="technical-report mx-auto w-full max-w-6xl animate-fade-in-up bg-white px-2 pb-24 text-slate-900 transition-colors dark:bg-brand-900 dark:text-brand-100 sm:px-4">
-            <section className={clsx(insightCardBase, 'relative overflow-hidden p-6')}>
+            <section className="relative border-b border-brand-200 py-5 dark:border-brand-700">
 
                 <div className="relative flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
                     <div className="max-w-3xl">
                         <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Technical threat model</p>
-                        <h1 className="mt-2 text-2xl font-semibold text-slate-950 dark:text-white md:text-3xl">
+                        <h1 className="mt-2 break-words text-2xl font-semibold text-slate-950 dark:text-white">
                             {projectName}
                         </h1>
-                        <p className="mt-3 max-w-3xl text-sm leading-7 text-brand-600 dark:text-brand-300">
+                        {activeView === 'overview' && <p className="mt-3 max-w-3xl text-sm leading-7 text-brand-600 dark:text-brand-300">
                             {data.summary}
-                        </p>
+                        </p>}
                         <div className="mt-5 flex flex-wrap items-center gap-3 text-sm text-brand-500 dark:text-brand-400">
-                            <span className={clsx('border px-2 py-1 text-xs font-semibold uppercase', publicationBlocked ? 'border-red-300 text-red-700' : 'border-emerald-300 text-emerald-700')}>
+                            <span className={clsx('border px-2 py-1 text-xs font-semibold uppercase', publicationBlocked ? 'border-red-300 text-red-700 dark:text-red-300' : 'border-emerald-300 text-emerald-700 dark:text-emerald-300')}>
                                 {publicationLabel}
                             </span>
                             <span>Generated {data.timestamp || new Date().toLocaleString()}</span>
@@ -355,12 +419,15 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, isAnal
 
                     <div className="flex flex-wrap items-center gap-2 lg:justify-end">
                         <button
-                            onClick={() => setShowFilters(!showFilters)}
+                            onClick={() => {
+                                setActiveView('register');
+
+                            }}
                             className="ui-button-secondary"
                         >
                             <span className="inline-flex items-center gap-2">
-                                <Filter className="h-4 w-4" />
-                                Filters {hasActiveFilters && `(${filteredThreats.length})`}
+                                <ShieldAlert className="h-4 w-4" />
+                                Findings
                             </span>
                         </button>
                         <button onClick={handlePDFExport} disabled={publicationBlocked} className="btn-brand disabled:cursor-not-allowed disabled:opacity-45" title={publicationBlocked ? 'Resolve quality-gate failures before final export' : 'Export final PDF'}>
@@ -381,122 +448,74 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, isAnal
                     </div>
                 </div>
 
-                <div className="relative mt-8 grid gap-4 md:grid-cols-3">
+                {activeView === 'overview' ? <div className="relative mt-6 grid gap-4 md:grid-cols-3">
                     <MetricCard label="Security score" value={`${data.score}/100`} tone={data.score < 40 ? 'danger' : data.score < 70 ? 'warning' : 'success'} detail={data.score < 40 ? 'Immediate response recommended' : data.score < 70 ? 'Address top findings next' : 'Strong baseline with focused follow-up'} />
                     <MetricCard label="Confirmed risks" value={confirmedCount} tone={criticalCount > 0 ? 'danger' : 'accent'} detail={`${criticalCount} critical, ${highCount} high`} />
                     <MetricCard label="Open questions" value={openQuestionCount} tone="warning" detail={openQuestionCount ? 'Answering these sharpens the model' : 'Architecture detail looks well covered'} />
-                </div>
+                </div> : <dl className="mt-5 flex flex-wrap gap-x-6 gap-y-2 text-xs text-brand-600 dark:text-brand-300">
+                    <div className="flex gap-2"><dt>Score</dt><dd className="font-semibold">{data.score}/100</dd></div>
+                    <div className="flex gap-2"><dt>Confirmed</dt><dd className="font-semibold">{confirmedCount} ({criticalCount} critical, {highCount} high)</dd></div>
+                    <div className="flex gap-2"><dt>Open questions</dt><dd className="font-semibold">{openQuestionCount}</dd></div>
+                </dl>}
             </section>
 
-            {showFilters && (
-                <section className={clsx(insightCardBase, 'mt-6 p-5')}>
-                    <div className="flex items-center justify-between gap-4">
-                        <div>
-                            <h3 className="text-lg font-bold text-brand-950 dark:text-white">Filter findings</h3>
-                            <p className="mt-1 text-sm text-brand-600 dark:text-brand-400">Narrow the list below by severity, category, tier, or wording.</p>
-                        </div>
-                        {hasActiveFilters && (
-                            <button onClick={clearFilters} className="inline-flex items-center gap-1 text-sm font-semibold text-brand-600 hover:text-brand-800 dark:text-brand-400 dark:hover:text-white">
-                                <X className="h-4 w-4" />
-                                Clear all
+            <nav className="sticky top-[68px] z-30 mt-4 overflow-x-auto border-y border-brand-200 bg-white/95 py-2 backdrop-blur dark:border-brand-700 dark:bg-brand-900/95" aria-label="Analysis result views">
+                <div className="flex min-w-max gap-1">
+                    {resultViews.map((view) => {
+                        const Icon = view.icon;
+                        const isActive = activeView === view.id;
+                        return (
+                            <button
+                                key={view.id}
+                                type="button"
+                                onClick={() => setActiveView(view.id)}
+                                className={clsx(
+                                    'inline-flex h-11 items-center justify-center gap-2 border-b-2 px-4 text-sm font-semibold transition-colors',
+                                    isActive
+                                        ? 'border-brand-primary text-brand-primary dark:text-indigo-300'
+                                        : 'border-transparent text-brand-600 hover:bg-brand-50 hover:text-brand-950 dark:text-brand-300 dark:hover:bg-brand-800 dark:hover:text-white',
+                                )}
+                                aria-current={isActive ? 'page' : undefined}
+                            >
+                                <Icon className="h-4 w-4 shrink-0" />
+                                <span>{view.label}</span>
                             </button>
-                        )}
-                    </div>
-                    <div className="mt-5 grid gap-4 md:grid-cols-4">
-                        <div>
-                            <label className="mb-1.5 block text-sm font-medium text-brand-700 dark:text-brand-300">Search</label>
-                            <div className="relative">
-                                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-brand-400" />
-                                <input
-                                    type="text"
-                                    value={filters.search}
-                                    onChange={(e) => setFilters({ ...filters, search: e.target.value })}
-                                    placeholder="Search findings..."
-                                    className="input-brand w-full pl-9 text-sm"
-                                />
-                            </div>
-                        </div>
-                        <div>
-                            <label className="mb-1.5 block text-sm font-medium text-brand-700 dark:text-brand-300">Severity</label>
-                            <select value={filters.severity} onChange={(e) => setFilters({ ...filters, severity: e.target.value })} className="input-brand w-full text-sm">
-                                {severities.map((s) => <option key={s} value={s}>{s === 'all' ? 'All severities' : s}</option>)}
-                            </select>
-                        </div>
-                        <div>
-                            <label className="mb-1.5 block text-sm font-medium text-brand-700 dark:text-brand-300">Category</label>
-                            <select value={filters.category} onChange={(e) => setFilters({ ...filters, category: e.target.value })} className="input-brand w-full text-sm">
-                                {categories.map((c) => <option key={c} value={c}>{c === 'all' ? 'All categories' : c}</option>)}
-                            </select>
-                        </div>
-                        <div>
-                            <label className="mb-1.5 block text-sm font-medium text-brand-700 dark:text-brand-300">Tier</label>
-                            <select value={filters.tier} onChange={(e) => setFilters({ ...filters, tier: e.target.value })} className="input-brand w-full text-sm">
-                                {tiers.map((t) => <option key={t} value={t}>{t === 'all' ? 'All tiers' : t}</option>)}
-                            </select>
-                        </div>
-                    </div>
-                </section>
-            )}
-
-            {(publicationBlocked || integrityViolations.length > 0) && (
-                <div className="mt-6 border-l-4 border-red-600 bg-white px-4 py-3 text-sm text-slate-700 dark:bg-red-950/20 dark:text-red-200">
-                    <p className="font-semibold text-red-700 dark:text-red-300">This report contradicts itself and cannot be published as final.</p>
-                    <ul className="mt-1 list-disc space-y-0.5 pl-5">
-                        {integrityViolations.map((violation) => (
-                            <li key={violation.check}>{violation.detail} ({violation.count})</li>
-                        ))}
-                    </ul>
+                        );
+                    })}
                 </div>
-            )}
+            </nav>
 
-            {!publicationBlocked && completenessWarnings.length > 0 && (
-                <div className="mt-6 border-l-4 border-amber-500 bg-white px-4 py-3 text-sm text-slate-700 dark:bg-amber-950/20 dark:text-amber-200">
-                    <p className="font-semibold text-amber-700 dark:text-amber-300">The findings stand; these gaps need a reviewer's eye before sign-off.</p>
-                    <ul className="mt-1 list-disc space-y-0.5 pl-5">
-                        {completenessWarnings.map((warning) => (
-                            <li key={warning.check}>{warning.detail} ({warning.count})</li>
-                        ))}
-                    </ul>
-                </div>
-            )}
 
-            <section className="mt-6">
-                <div className={clsx(insightCardBase, 'p-6')}>
-                    <h2 className="text-lg font-bold text-brand-950 dark:text-white">What to fix first</h2>
-                    <p className="mt-1 text-sm text-brand-600 dark:text-brand-400">
-                        Ordered by severity, evidence, and how much of the system each issue exposes.
-                    </p>
 
-                    {topStory ? (
-                        <div className={clsx('mt-5 rounded-lg border p-5', severityTheme[topStory.severity]?.surface, severityTheme[topStory.severity]?.border)}>
-                            <div className="flex flex-wrap items-center gap-3">
-                                <SeverityBadge severity={topStory.severity} />
-                                <span className="text-sm font-semibold text-brand-700 dark:text-brand-300">{topStory.tier}</span>
-                            </div>
-                            <h3 className="mt-4 text-xl font-bold tracking-tight text-brand-950 dark:text-white">{topStory.title}</h3>
-                            <p className="mt-3 text-sm leading-7 text-brand-700 dark:text-brand-300">
-                                {topStory.explanation?.why_flagged || topStory.description}
-                            </p>
+            {(activeView === 'overview' || activeView === 'assurance') && (
+                <>
+                    {(publicationBlocked || integrityViolations.length > 0) && (
+                        <div className="mt-6 border-l-4 border-red-600 bg-white px-4 py-3 text-sm text-slate-700 dark:bg-red-950/20 dark:text-red-200">
+                            <p className="font-semibold text-red-700 dark:text-red-300">This report contradicts itself and cannot be published as final.</p>
+                            <ul className="mt-1 list-disc space-y-0.5 pl-5">
+                                {integrityViolations.map((violation) => (
+                                    <li key={violation.check}>{violation.detail} ({violation.count})</li>
+                                ))}
+                            </ul>
                         </div>
-                    ) : (
-                        <EmptyInsight
-                            icon={ShieldCheck}
-                            title="No immediate threats detected"
-                            description="This run did not surface any findings. Add more architecture detail if you want a deeper assessment."
-                        />
                     )}
 
-                    {priorityActions.length > 0 && (
-                        <div className="mt-5 space-y-4">
-                            {priorityActions.slice(0, 3).map((action, index) => (
-                                <PriorityActionCard key={`${action.title}-${index}`} action={action} index={index} />
-                            ))}
+                    {!publicationBlocked && completenessWarnings.length > 0 && (
+                        <div className="mt-6 border-l-4 border-amber-500 bg-white px-4 py-3 text-sm text-slate-700 dark:bg-amber-950/20 dark:text-amber-200">
+                            <p className="font-semibold text-amber-700 dark:text-amber-300">The findings stand; these gaps need a reviewer's eye before sign-off.</p>
+                            <ul className="mt-1 list-disc space-y-0.5 pl-5">
+                                {completenessWarnings.map((warning) => (
+                                    <li key={warning.check}>{warning.detail} ({warning.count})</li>
+                                ))}
+                            </ul>
                         </div>
                     )}
-                </div>
-            </section>
+                </>
+            )}
 
-            <section className="mt-6">
+            {activeView === 'overview' && <ReportOverview threats={allThreatsSorted} reviewStates={reviewStates} onSelect={setSelectedThreat} onOpenRegister={() => setActiveView('register')} onOpenAssurance={() => setActiveView('assurance')} evidenceRequests={evidenceRequests} />}
+
+            {activeView === 'architecture' && <section className="mt-6">
                 <div className={clsx(insightCardBase, 'mx-auto w-full max-w-6xl p-6')}>
                     <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                         <div className="text-center lg:text-left">
@@ -555,11 +574,10 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, isAnal
                     </div>
                     <div
                         ref={diagramViewportRef}
-                        onWheel={handleDiagramWheel}
-                        className="architecture-diagram mt-5 flex min-h-[320px] w-full items-center justify-center overflow-auto rounded-md border border-slate-200 bg-white p-4 dark:border-brand-700 dark:bg-brand-900/55 sm:min-h-[400px] sm:p-6"
+                        className="architecture-diagram mt-5 flex h-[480px] max-h-[65vh] min-h-[280px] w-full cursor-grab items-start justify-start overflow-auto rounded-md border border-slate-200 bg-white p-4 active:cursor-grabbing dark:border-brand-700 dark:bg-brand-900/55 sm:p-6"
                         aria-label="Architecture diagram. Use the mouse wheel or zoom controls to change scale."
                     >
-                        <div ref={mermaidRef} className="flex h-full min-w-full w-max shrink-0 items-center justify-center" />
+                        <div ref={mermaidRef} className="flex min-h-full min-w-full w-max shrink-0 items-start justify-center" />
                     </div>
                 </div>
 
@@ -576,13 +594,30 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, isAnal
                     </p>
                 )}
 
-            </section>
+                <AnalystWorkbench
+                    data={data}
+                    projectName={projectName}
+                    reviewStates={reviewStates}
+                    annotationScope={reviewKey}
+                    mode="architecture"
+                />
 
-            <section className="mt-8">
-                <ThreatSection threats={sortedFilteredThreats} onSelectThreat={setSelectedThreat} />
-            </section>
+                {onReviewModel ? <button type="button" className="ui-button-secondary mt-5" onClick={onReviewModel} disabled={isAnalyzing}><Pencil size={16} />Edit modeled architecture</button> : onReanalyze && (
+                    <section className="mt-8">
+                        <ArchitectureModelEditor
+                            document={data.architecture_document}
+                            onReanalyze={onReanalyze}
+                            isAnalyzing={isAnalyzing}
+                        />
+                    </section>
+                )}
+            </section>}
 
-            <section className="mt-8 space-y-4">
+            {activeView === 'register' && <section className="mt-8">
+                <FindingsWorkspace threats={data.threats || []} filters={filters} onFiltersChange={setFilters} reviewStates={reviewStates} onSelectThreat={setSelectedThreat} />
+            </section>}
+
+            {activeView === 'assurance' && <section className="mt-8 space-y-4">
                 <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Supporting detail</h2>
 
                 {(evidenceRequests || followUpQuestions.length > 0) && (
@@ -590,7 +625,7 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, isAnal
                         title="Open questions for the team"
                         summary={openQuestionCount ? `${openQuestionCount} answers would sharpen this model` : undefined}
                     >
-                        <EvidenceRequests evidenceRequests={evidenceRequests} cardClassName="" />
+                        <EvidenceRequests evidenceRequests={evidenceRequests} cardClassName="" onClarify={onClarify} />
                         {followUpQuestions.length > 0 && (
                             <div className="mt-4 space-y-3">
                                 {followUpQuestions.slice(0, 4).map((item) => (
@@ -657,13 +692,39 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, isAnal
                                 <div key={category} className="border-b border-brand-200 pb-3 dark:border-brand-700">
                                     <p className="text-sm font-semibold text-brand-950 dark:text-white">{category}</p>
                                     <p className="mt-1 text-xs leading-5 text-brand-500 dark:text-brand-400">
-                                        {summary.finding || 0} findings · {summary.control_present || 0} controlled · {summary.unknown || 0} unknown
+                                        {summary.finding || 0} findings · {summary.control_present || 0} controlled · {(summary.unknown || 0) + (summary.potential || 0)} unknown
                                     </p>
                                 </div>
                             );
                         })}
                     </div>
                 </DetailSection>
+
+                {Object.keys(retrievalEngine).length > 0 && (
+                    <DetailSection
+                        title="Threat retrieval evidence"
+                        summary={`${retrievalEngine.profile || 'local'} profile · ${localIntelligence.status || retrievalEngine.status || 'unknown'}`}
+                    >
+                        <div className="grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-3">
+                            {[
+                                ['Retrieval', retrievalEngine.strategy || 'Local retrieval'],
+                                ['Embedding', `${retrievalEngine.embedding_model || 'Fallback'} · ${retrievalEngine.embedding_backend || 'unknown'}`],
+                                ['Lexical matching', `BM25 · ${retrievalEngine.lexical_documents ?? 0} knowledge records`],
+                                ['Reranker', `${retrievalEngine.reranker?.model || 'Security features'} · ${retrievalEngine.reranker?.backend || 'fallback'}`],
+                                ['Runtime', `${retrievalEngine.monitoring?.queries ?? 0} queries · p95 ${retrievalEngine.monitoring?.latency_ms?.p95 ?? 0} ms · ${Math.round((retrievalEngine.monitoring?.fallback_rate ?? 0) * 100)}% fallback`],
+                                ['Knowledge quality', `${knowledgeAudit.near_duplicate_count ?? 0} similarity reviews · ${knowledgeAudit.contradiction_count ?? 0} contradictions`],
+                            ].map(([label, value]) => (
+                                <div key={label} className="min-w-0 rounded-md border border-brand-200 px-4 py-3 dark:border-brand-700">
+                                    <p className="text-xs font-semibold uppercase text-brand-500 dark:text-brand-400">{label}</p>
+                                    <p className="mt-2 break-words leading-6 text-brand-800 dark:text-brand-200">{value}</p>
+                                </div>
+                            ))}
+                        </div>
+                        <p className="mt-4 text-xs leading-5 text-brand-500 dark:text-brand-400">
+                            Dense weight {retrievalEngine.fusion_weights?.dense ?? 0}; BM25 weight {retrievalEngine.fusion_weights?.bm25 ?? 0}; vector cache {retrievalEngine.cache || 'unknown'}; {Object.keys(retrievalEngine.calibration?.thresholds || {}).length} calibrated scopes.
+                        </p>
+                    </DetailSection>
+                )}
 
                 {aiSecurityLens.items?.length > 0 && (
                     <DetailSection title="AI-specific risk" summary={aiSecurityLens.overview || undefined}>
@@ -704,23 +765,99 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, isAnal
                         </div>
                     </DetailSection>
                 )}
-            </section>
+                <AnalystWorkbench
+                    data={data}
+                    projectName={projectName}
+                    reviewStates={reviewStates}
+                    annotationScope={reviewKey}
+                />
+            </section>}
 
-            <AnalystWorkbench
-                data={data}
-                projectName={projectName}
-                reviewStates={reviewStates}
-            />
+            {activeView === 'report' && (
+                <section className={clsx(insightCardBase, 'mt-6 overflow-hidden')}>
+                    <div className="flex flex-col gap-4 border-b border-brand-200 p-6 dark:border-brand-700 md:flex-row md:items-center md:justify-between">
+                        <div>
+                            <div className="flex items-center gap-2">
+                                <BarChart3 className="h-5 w-5 text-brand-primary" />
+                                <h2 className="text-lg font-bold text-brand-950 dark:text-white">Final report</h2>
+                            </div>
+                            <p className="mt-2 text-sm text-brand-600 dark:text-brand-400">
+                                Review the concise management summary before exporting the full technical report.
+                            </p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                            <button onClick={handlePDFExport} disabled={publicationBlocked} className="btn-brand disabled:cursor-not-allowed disabled:opacity-45">
+                                <span className="inline-flex items-center gap-2"><Download className="h-4 w-4" /> PDF</span>
+                            </button>
+                            {data.report_markdown && (
+                                <button onClick={downloadMarkdown} disabled={publicationBlocked} className="ui-button-secondary disabled:cursor-not-allowed disabled:opacity-45">
+                                    <span className="inline-flex items-center gap-2"><FileText className="h-4 w-4" /> Markdown</span>
+                                </button>
+                            )}
+                        </div>
+                    </div>
 
-            {onReanalyze && (
-                <section className="mt-8">
-                    <ArchitectureModelEditor
-                        document={data.architecture_document}
-                        onReanalyze={onReanalyze}
-                        isAnalyzing={isAnalyzing}
-                    />
+                    <div className="p-6">
+                        <div className="grid gap-5 border-b border-brand-200 pb-6 text-sm dark:border-brand-700 md:grid-cols-3">
+                            <div>
+                                <p className="text-xs font-semibold uppercase text-brand-500 dark:text-brand-400">Publication state</p>
+                                <p className="mt-2 font-semibold text-brand-950 dark:text-white">{publicationLabel}</p>
+                            </div>
+                            <div>
+                                <p className="text-xs font-semibold uppercase text-brand-500 dark:text-brand-400">Confirmed exposure</p>
+                                <p className="mt-2 font-semibold text-brand-950 dark:text-white">{confirmedCount} risks, including {criticalCount} critical and {highCount} high</p>
+                            </div>
+                            <div>
+                                <p className="text-xs font-semibold uppercase text-brand-500 dark:text-brand-400">Model coverage</p>
+                                <p className="mt-2 font-semibold text-brand-950 dark:text-white">{data.coverage?.components_analyzed ?? 0} components, {data.coverage?.flows_analyzed ?? 0} flows</p>
+                            </div>
+                        </div>
+
+                        <div className="border-b border-brand-200 py-6 dark:border-brand-700">
+                            <h3 className="text-sm font-bold uppercase text-brand-500 dark:text-brand-400">Executive summary</h3>
+                            <p className="mt-3 max-w-4xl text-sm leading-7 text-brand-700 dark:text-brand-200">{data.summary}</p>
+                        </div>
+
+                        <div className="py-6">
+                            <div className="flex items-center justify-between gap-3">
+                                <h3 className="text-sm font-bold uppercase text-brand-500 dark:text-brand-400">Confirmed risks requiring attention</h3>
+                                <span className="text-xs font-semibold text-brand-500 dark:text-brand-400">{confirmedCount} total</span>
+                            </div>
+                            {confirmedThreats.length > 0 ? (
+                                <div className="mt-4 divide-y divide-brand-200 border-y border-brand-200 dark:divide-brand-700 dark:border-brand-700">
+                                    {confirmedThreats.slice(0, 8).map((threat) => (
+                                        <button
+                                            key={threat.id}
+                                            type="button"
+                                            onClick={() => setSelectedThreat(threat)}
+                                            className="grid w-full gap-3 px-1 py-4 text-left hover:bg-brand-50 dark:hover:bg-brand-800/60 md:grid-cols-[minmax(0,1fr)_auto_auto] md:items-center"
+                                        >
+                                            <span className="font-semibold text-brand-950 dark:text-white">{threat.title}</span>
+                                            <span className="text-sm text-brand-600 dark:text-brand-300">{threat.component || threat.affected_component || 'System'}</span>
+                                            <SeverityBadge severity={threat.severity} />
+                                        </button>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div className="mt-4">
+                                    <EmptyInsight
+                                        icon={ShieldCheck}
+                                        title="No confirmed risks"
+                                        description="This analysis has no findings classified as confirmed after reviewer decisions."
+                                    />
+                                </div>
+                            )}
+                        </div>
+                    </div>
                 </section>
             )}
+
+            <AnalysisCopilot
+                key={`${projectName}-${data.timestamp || ''}`}
+                data={data}
+                sidebarCollapsed={sidebarCollapsed}
+                onProposeUpdate={onProposeUpdate}
+            />
             <RiskDetailsModal
                 threat={selectedThreat}
                 reviewState={selectedThreat ? reviewStates[selectedThreat.id] || 'open' : 'open'}

@@ -93,9 +93,9 @@ class ReportGenerator:
             summary = (coverage.get("category_summary") or {}).get(category, {})
             lines.append(
                 f"| {category} | {summary.get('finding', 0)} | {summary.get('control_present', 0)} | "
-                f"{summary.get('unknown', 0)} | {summary.get('not_applicable', 0)} |"
+                f"{summary.get('unknown', 0) + summary.get('potential', 0)} | {summary.get('not_applicable', 0)} |"
             )
-        unknown = [cell for cell in coverage.get("cells", []) if cell.get("status") == "unknown"]
+        unknown = [cell for cell in coverage.get("cells", []) if cell.get("status") in {"unknown", "potential"}]
         if unknown:
             lines.append("")
             lines.append(
@@ -234,6 +234,8 @@ class ReportGenerator:
             f"- Business impact: {threat.business_impact or 'n/a'}",
             f"- Mappings: CWE={', '.join(threat.cwe or []) or 'n/a'} | MITRE={', '.join(threat.mitre_attack or []) or 'n/a'} | OWASP={', '.join(threat.owasp_top_10 or []) or 'n/a'}",
         ]
+        for mapping in (threat.explanation or {}).get("framework_mappings") or []:
+            lines.append(f"- Framework reference: [{mapping['framework_name']} {mapping['version']} / {mapping['id']}: {mapping['name']}]({mapping['url']}) (taxonomy alignment, not compliance certification)")
         if threat.evidence_details:
             lines.append("- Evidence:")
             for item in threat.evidence_details:

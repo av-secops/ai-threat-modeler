@@ -7,6 +7,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ..models import SystemArchitecture
 from . import source_index as sources
+from .control_contracts import boundary_dimensions, presence
+from .source_correlation import reconcile_claims, source_metadata
 
 
 CONTROL_KEYS = (
@@ -19,7 +21,7 @@ CONTROL_KEYS = (
 
 BLOCKING_ISSUE_TYPES = {
     "duplicate_component_id", "invalid_flow", "invalid_boundary_membership",
-    "contradictory_control",
+    "contradictory_control", "source_conflict",
 }
 
 
@@ -31,10 +33,14 @@ def canonicalize_architecture(architecture: SystemArchitecture) -> Tuple[SystemA
     """
     metadata = architecture.metadata or {}
     source_text = metadata.get("source_text") or metadata.get("architecture_text") or ""
-    source_documents = metadata.get("source_documents") or []
+    source_documents = [source_metadata(d) for d in metadata.get("source_documents") or []]
+    metadata['source_documents'] = source_documents
     index = sources.build(source_text)
     component_ids = {component.id for component in architecture.components or []}
+    components_by_id = {component.id: component for component in architecture.components or []}
     issues: List[Dict[str, Any]] = []
+    source_conflicts = _source_conflicts(source_documents)
+    issues.extend(source_conflicts)
     component_id_counts: Dict[str, int] = {}
     component_name_counts: Dict[str, int] = {}
     for component in architecture.components or []:
@@ -69,14 +75,25 @@ def canonicalize_architecture(architecture: SystemArchitecture) -> Tuple[SystemA
         if citation:
             props["source_document"] = citation.document
         props["evidence_status"] = "explicit" if explicit else "inferred"
+        existing_conflicts = {key: state for key, state in (props.get("control_assertions") or {}).items() if state == "conflicting"}
         props["control_assertions"] = {
             key: _assertion_status(props.get(key)) for key in CONTROL_KEYS
         }
+        props["control_assertions"].update(existing_conflicts)
+        for key, records in (props.get("control_evidence") or {}).items():
+            for record in records:
+                if isinstance(record, dict):
+                    claim_citation = index.find(record.get('statement', ''))
+                    if claim_citation and not record.get('source_id'):
+                        record.update(claim_citation.as_dict())
+            states = {record.get("state") for record in records if isinstance(record, dict)}
+            if {"present", "absent"} <= states:
+                props["control_assertions"][key] = "conflicting"
+                issues.append(_gap("contradictory_control", component.id,
+                    f"Sources disagree about {key}; both claims are retained for review.", "High"))
         contradictory = sorted(
             key for key in set(props.get("explicit_negations") or [])
-            if props.get(key) is True or (
-                isinstance(props.get(key), str) and props.get(key) not in {"", "none", "unknown"}
-            )
+            if presence(props.get(key)) is True
         )
         if contradictory:
             issues.append(_gap(
@@ -131,14 +148,16 @@ def canonicalize_architecture(architecture: SystemArchitecture) -> Tuple[SystemA
                 "The same source, destination, protocol, and data type are modeled more than once.", "Medium",
             ))
         flow_keys.add(flow_key)
-        source = next(item for item in architecture.components if item.id == flow.source_id)
-        target = next(item for item in architecture.components if item.id == flow.target_id)
+        source = components_by_id[flow.source_id]
+        target = components_by_id[flow.target_id]
         explicit_crossing = bool((flow.properties or {}).get("crosses_trust_boundary"))
-        actual_crossing = source.trust_level != target.trust_level
+        dimensions = boundary_dimensions(source, target)
+        actual_crossing = bool(dimensions)
+        flow.properties = {**(flow.properties or {}), 'boundary_dimensions': dimensions, 'crosses_trust_boundary': actual_crossing or explicit_crossing}
         if explicit_crossing and not actual_crossing:
             issues.append(_gap(
                 "boundary_contradiction", f"{flow.source_id}->{flow.target_id}",
-                "The flow is marked as boundary-crossing but both endpoints have the same trust level.", "Medium",
+                "The flow declares a trust boundary not represented by endpoint trust levels, accounts, tenants or environments; confirm the boundary.", "Medium",
             ))
         if actual_crossing:
             boundary_crossings.append({
@@ -146,6 +165,7 @@ def canonicalize_architecture(architecture: SystemArchitecture) -> Tuple[SystemA
                 "source_trust": source.trust_level,
                 "target_trust": target.trust_level,
                 "explicit": not flow.assumed,
+                "dimensions": dimensions,
             })
 
     for boundary in architecture.trust_boundaries or []:
@@ -169,6 +189,15 @@ def canonicalize_architecture(architecture: SystemArchitecture) -> Tuple[SystemA
             f"Asset {asset.name} inferred from storage and data classification.", "Medium",
         )])
 
+    architecture.metadata = metadata
+    correlation = reconcile_claims(architecture)
+    metadata = architecture.metadata
+    if correlation['facts']:
+        reconciled = {c.id for c in architecture.components if c.properties.get('correlated_controls')}
+        issues = [issue for issue in issues if not (issue['type'] == 'contradictory_control' and issue.get('scope') in reconciled)]
+        for conflict in correlation['conflicts']:
+            issues.append(_gap('contradictory_control', conflict['element_id'],
+                f"Sources disagree about {conflict['control']}; inspect the cited claims before resolving this control.", 'High'))
     if metadata.get("authoritative_model") and metadata.get("actors"):
         actors = metadata["actors"]
         identities = metadata.get("identities", [])
@@ -178,6 +207,7 @@ def canonicalize_architecture(architecture: SystemArchitecture) -> Tuple[SystemA
     metadata["identities"] = identities
     metadata["canonical_model_version"] = "3.0"
     metadata["source_provenance"] = _provenance(index, source_documents)
+    metadata["source_reconciliation"] = _source_reconciliation(source_documents, source_conflicts)
     metadata["source_attribution"] = _attribution(index, architecture)
     metadata["boundary_crossings"] = boundary_crossings
     metadata["architecture_contract"] = {
@@ -216,6 +246,108 @@ def canonicalize_architecture(architecture: SystemArchitecture) -> Tuple[SystemA
         },
     }
     return architecture, validation
+
+
+def _source_conflicts(documents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Identify authoritative inputs that explicitly claim different systems.
+
+    Different files often describe different tiers of one design, so disjoint
+    technology lists alone are not a conflict. A conflict requires incompatible
+    declared system names, or two complete structured system models with no
+    shared technology signal.
+    """
+    design = [item for item in documents if item.get("role") != "reference_report"]
+    conflicts: List[Dict[str, Any]] = []
+    for index, left in enumerate(design):
+        for right in design[index + 1:]:
+            left_name = str(left.get("system_name") or "").strip().lower()
+            right_name = str(right.get("system_name") or "").strip().lower()
+            left_signals = {item for item in str(left.get("technology_signals") or "").split(",") if item}
+            right_signals = {item for item in str(right.get("technology_signals") or "").split(",") if item}
+            names_conflict = bool(
+                left_name and right_name and left_name != right_name
+                and left_name not in right_name and right_name not in left_name
+            )
+            complete_models_conflict = (
+                left.get("structured_kind") == "architecture"
+                and right.get("structured_kind") == "architecture"
+                and bool(left_signals) and bool(right_signals)
+                and not (left_signals & right_signals)
+            )
+            same_system = bool(left_name and right_name and (
+                left_name == right_name or left_name in right_name or right_name in left_name
+            ))
+            left_environment = str(left.get("environment") or "").lower()
+            right_environment = str(right.get("environment") or "").lower()
+            same_environment = not left_environment or not right_environment or left_environment == right_environment
+            left_version = str(left.get("deployment_version") or left.get('document_version') or "").lower()
+            right_version = str(right.get("deployment_version") or right.get('document_version') or "").lower()
+            version_conflict = bool(
+                same_system and same_environment and left_version and right_version
+                and left_version != right_version
+                and left.get("structured_kind") == "architecture"
+                and right.get("structured_kind") == "architecture"
+            )
+            if not names_conflict and not complete_models_conflict and not version_conflict:
+                continue
+            conflicts.append(_gap(
+                "source_conflict",
+                f"{left.get('filename', 'source 1')}|{right.get('filename', 'source 2')}",
+                (
+                    "Uploaded authoritative sources are incompatible or describe different model versions: "
+                    f"{left.get('filename', 'source 1')} ({left.get('system_name') or 'unnamed'}) and "
+                    f"{right.get('filename', 'source 2')} ({right.get('system_name') or 'unnamed'})."
+                ),
+                "High",
+            ))
+    return conflicts
+
+
+def _source_reconciliation(
+    documents: List[Dict[str, Any]], conflicts: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Explain which artifacts were treated as authoritative and why."""
+    def authority(document: Dict[str, Any]) -> Tuple[int, str]:
+        if document.get("role") == "reference_report":
+            return 20, "reference report; context only"
+        if document.get("structured_kind") == "architecture":
+            return 100, "structured architecture contract"
+        if str(document.get("type") or "").lower() in {
+            "tf", "hcl", "bicep", "yaml", "yml", "json",
+        } and document.get("structured_kind") in {
+            "kubernetes", "docker_compose", "cloudformation", "architecture",
+        }:
+            return 95, "machine-readable deployment definition"
+        if document.get("role") == "source_design":
+            return 80, "design source"
+        return 60, "supporting context"
+
+    decisions = []
+    environments: Dict[str, List[str]] = {}
+    for document in documents:
+        score, reason = authority(document)
+        environment = str(document.get("environment") or "unspecified")
+        environments.setdefault(environment, []).append(document.get("filename", "source"))
+        decisions.append({
+            "filename": document.get("filename", "source"),
+            "role": document.get("role", "source_design"),
+            "authority_score": score,
+            "reason": reason,
+            "environment": environment,
+            "deployment_version": document.get("deployment_version") or "unspecified",
+            "document_version": document.get("document_version") or "unspecified",
+            "last_updated": document.get("last_updated") or "unspecified",
+            "extraction_quality": document.get("extraction_quality") or "unknown",
+        })
+    decisions.sort(key=lambda item: (-item["authority_score"], item["filename"].lower()))
+    return {
+        "status": "conflict" if conflicts else "compatible",
+        "precedence": ["structured_architecture", "iac", "source_design", "user_context", "inference"],
+        "conflicts": conflicts,
+        "decisions": decisions,
+        "environments": environments,
+        "selected_authority": decisions[0]["filename"] if decisions else None,
+    }
 
 
 def _find_component_evidence(
@@ -264,11 +396,8 @@ def _extract_actors_and_identities(text: str, architecture: SystemArchitecture) 
 
 
 def _assertion_status(value: Any) -> str:
-    if value is True or (isinstance(value, str) and value not in {"", "none", "unknown"}):
-        return "present"
-    if value is False or value == "none":
-        return "absent"
-    return "unknown"
+    state = presence(value)
+    return "present" if state is True else "absent" if state is False else "unknown"
 
 
 def _provenance(index: sources.SourceIndex, source_documents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

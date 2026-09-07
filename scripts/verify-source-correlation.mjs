@@ -1,0 +1,84 @@
+import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+import { mkdir, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+
+const require = createRequire(import.meta.url);
+const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const output = path.resolve('backend/evaluation_reports/source-correlation-ui');
+await mkdir(output, { recursive: true });
+const browser = await chromium.launch({ headless: true, channel: 'msedge' });
+const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+const errors = [], report = {};
+page.on('pageerror', (error) => errors.push(error.message));
+const ready = () => page.waitForFunction(() => [...document.querySelectorAll('button')].some((button) => button.textContent === 'Analyze reviewed model' && !button.disabled));
+async function prepare(action) {
+  const pending = page.waitForResponse((response) => response.url().endsWith('/model-review/prepare'));
+  await action();
+  const response = await pending;
+  assert.equal(response.status(), 200, await response.text());
+  await ready();
+  return response.json();
+}
+try {
+  await page.goto('http://127.0.0.1:5173/');
+  await page.getByPlaceholder('e.g. Payment Gateway V2').fill('Source correlation QA');
+  await page.getByLabel('Architecture description').fill('React calls a Node.js API over HTTPS. The Node.js API has no rate limiting. PostgreSQL stores customer records.');
+  await page.locator('#useLocalSlm').uncheck();
+  let preview = await prepare(() => page.getByRole('button', { name: 'Review architecture', exact: true }).click());
+  const api = preview.architecture.components.find((c) => c.type === 'API');
+  await page.getByRole('navigation', { name: 'Model review sections' }).getByRole('button', { name: 'Sources', exact: true }).click();
+  preview = await prepare(() => page.getByLabel('Add review files', { exact: true }).setInputFiles({ name: 'controls.md', mimeType: 'text/markdown', buffer: Buffer.from('Node.js API enforces rate limiting.\nNode.js API will implement input validation.') }));
+  assert.ok(preview.correlation.conflicts.some((c) => c.element_id === api.id && c.control === 'rate_limiting'));
+  const claims = preview.correlation.facts.filter((c) => c.element_id === api.id && c.control === 'rate_limiting');
+  assert.equal(new Set(claims.map((c) => c.document)).size, 2);
+  report.conflictingDocumentCorrelated = true;
+  await page.getByRole('navigation', { name: 'Model review sections' }).getByRole('button', { name: 'Architecture', exact: true }).click();
+  await page.getByRole('button', { name: `Evidence: ${api.name}`, exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.waitFor();
+  await dialog.getByText('conflicting', { exact: true }).waitFor();
+  await dialog.getByText('planned', { exact: true }).first().waitFor();
+  await page.screenshot({ path: path.join(output, 'evidence-light.png') });
+  await dialog.getByRole('button', { name: 'Open source', exact: true }).first().click();
+  await page.getByLabel('Source text: Architecture notes', { exact: true }).waitFor();
+  report.evidenceLinksToSource = true;
+  await page.getByRole('navigation', { name: 'Model review sections' }).getByRole('button', { name: 'Architecture', exact: true }).click();
+  const svg = page.locator('[aria-label="Draft architecture diagram"] svg');
+  await svg.waitFor();
+  report.svgNodes = await svg.locator('.node').evaluateAll((nodes) => nodes.map((node) => ({ id: node.id, role: node.getAttribute('role'), label: node.getAttribute('aria-label') })));
+  report.diagramBindings = preview.diagram_bindings;
+  await svg.getByRole('button', { name: /Inspect component.*Node/ }).click();
+  await page.getByRole('dialog').waitFor();
+  delete report.svgNodes;
+  delete report.diagramBindings;
+  await page.getByRole('button', { name: 'Close source evidence', exact: true }).click();
+  report.diagramNodeInspectable = true;
+  await svg.getByRole('button', { name: 'Inspect data flow evidence', exact: true }).first().press('Enter');
+  await page.getByRole('dialog').waitFor();
+  await page.getByRole('button', { name: 'Close source evidence', exact: true }).click();
+  report.diagramFlowInspectable = true;
+  await page.getByTitle('Dark mode', { exact: true }).click();
+  await page.getByRole('button', { name: `Evidence: ${api.name}`, exact: true }).click();
+  await page.screenshot({ path: path.join(output, 'evidence-dark.png') });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({ path: path.join(output, 'evidence-mobile.png') });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
+  await page.getByRole('button', { name: 'Close source evidence', exact: true }).click();
+  await page.getByRole('navigation', { name: 'Model review sections' }).getByRole('button', { name: 'Sources', exact: true }).click();
+  await page.getByText('controls.md', { exact: false }).first().click();
+  preview = await prepare(() => page.getByLabel('Include controls.md', { exact: true }).uncheck());
+  assert.equal(preview.correlation.conflicts.length, 0);
+  report.excludingConflictingSourceUpdatesModel = true;
+  assert.deepEqual(errors, []);
+  report.passed = true;
+} catch (error) {
+  report.failure = error.message;
+  await page.screenshot({ path: path.join(output, 'failure.png'), fullPage: true });
+  throw error;
+} finally {
+  report.errors = errors;
+  await writeFile(path.join(output, 'result.json'), JSON.stringify(report, null, 2));
+  console.log(JSON.stringify(report, null, 2));
+  await browser.close();
+}

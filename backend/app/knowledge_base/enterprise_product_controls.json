@@ -1,0 +1,1923 @@
+[
+  {
+    "id": "ENT-WEB-QUERY",
+    "title": "Database query parameter binding absent",
+    "description": "Attacker-controlled values can alter SQL structure where the application constructs queries dynamically. The stated absence of parameter binding is a control gap, not proof that an injectable query exists.",
+    "resource_type": [
+      "API",
+      "Service"
+    ],
+    "stride_category": "Tampering",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-89"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "parameterized_queries",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "parameterized_queries"
+    ],
+    "mitigation": "Bind values using the database driver's prepared statements; allowlist identifiers that cannot be bound. Do not concatenate request fields into SQL.",
+    "verification": "Review the actual query builder and run harmless quote and boolean test inputs in a test environment; query structure must stay constant.",
+    "preconditions": [
+      "The affected component explicitly states that parameterized queries is absent. Confirm the described operation exists before judging exploitability."
+    ],
+    "framework_mappings": [
+      {
+        "framework": "owasp_web",
+        "version": "2025",
+        "id": "A05"
+      }
+    ],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/89.html",
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "web",
+      "parameterized_queries"
+    ],
+    "version": "1.0.0",
+    "source": "Aegis enterprise product control catalog",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05"
+  },
+  {
+    "id": "ENT-WEB-NOSQL",
+    "title": "NoSQL query operator validation absent",
+    "description": "Untrusted JSON operators can change a document query's filter or authorization scope if request objects reach the query API.",
+    "resource_type": [
+      "API",
+      "Service"
+    ],
+    "stride_category": "Tampering",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-943"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "nosql_operator_validation",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "nosql_operator_validation"
+    ],
+    "mitigation": "Build server-owned query objects; reject operator keys and validate scalar types. Bind tenant scope independently of request JSON.",
+    "verification": "Submit unexpected operator objects and nested fields to a test endpoint; they must be rejected without changing authorization scope.",
+    "preconditions": [
+      "The affected component explicitly states that NoSQL operator validation is absent. Confirm the described operation exists before judging exploitability."
+    ],
+    "framework_mappings": [
+      {
+        "framework": "owasp_web",
+        "version": "2025",
+        "id": "A05"
+      }
+    ],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/943.html",
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "web",
+      "nosql_operator_validation"
+    ],
+    "version": "1.0.0",
+    "source": "Aegis enterprise product control catalog",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05"
+  },
+  {
+    "id": "ENT-WEB-COMMAND",
+    "title": "Command arguments are not isolated from executable syntax",
+    "description": "If untrusted values reach shell commands, missing argument isolation permits command interpretation under the process identity.",
+    "resource_type": [
+      "API",
+      "Service",
+      "Tool",
+      "MCP Server"
+    ],
+    "stride_category": "Elevation of Privilege",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-78",
+      "CWE-77"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "command_argument_isolation",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "command_argument_isolation"
+    ],
+    "mitigation": "Avoid a shell; call a fixed executable with an argument array, an allowlisted operation and least-privileged runtime credentials.",
+    "verification": "Trace the command sink and confirm metacharacters remain inert data; reject unapproved executables and flags.",
+    "preconditions": [
+      "The affected component explicitly states that command argument isolation is absent. Confirm the described operation exists before judging exploitability."
+    ],
+    "framework_mappings": [],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/78.html",
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "web",
+      "command_argument_isolation"
+    ],
+    "version": "1.0.0",
+    "source": "Aegis enterprise product control catalog",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05"
+  },
+  {
+    "id": "ENT-WEB-PATH",
+    "title": "File path confinement absent",
+    "description": "User-influenced file paths may escape the intended root through traversal, alternate encodings or link resolution.",
+    "resource_type": [
+      "API",
+      "Service",
+      "Tool"
+    ],
+    "stride_category": "Information Disclosure",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-22"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "path_canonicalization",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "path_canonicalization"
+    ],
+    "mitigation": "Resolve paths against a fixed root, verify the resolved target remains within it, and handle symbolic links and races explicitly.",
+    "verification": "Test traversal, double encoding and symbolic links against a disposable directory; no read may leave the permitted root.",
+    "preconditions": [
+      "The affected component explicitly states that path canonicalization is absent. Confirm the described operation exists before judging exploitability."
+    ],
+    "framework_mappings": [],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/22.html",
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "web",
+      "path_canonicalization"
+    ],
+    "version": "1.0.0",
+    "source": "Aegis enterprise product control catalog",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05"
+  },
+  {
+    "id": "ENT-WEB-XML",
+    "title": "XML external entity resolution is not blocked",
+    "description": "An XML consumer may resolve attacker-controlled external entities, disclosing local files or issuing internal requests.",
+    "resource_type": [
+      "API",
+      "Service"
+    ],
+    "stride_category": "Information Disclosure",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-611"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "xml_external_entities_disabled",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "xml_external_entities_disabled"
+    ],
+    "mitigation": "Disable DTDs, external entity resolution and external schemas in every XML parser, including document conversion libraries.",
+    "verification": "Use a local canary entity in an authorized parser test; parsing must not perform file or network resolution.",
+    "preconditions": [
+      "The affected component explicitly states that XML external entity blocking is absent. Confirm the described operation exists before judging exploitability."
+    ],
+    "framework_mappings": [],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/611.html",
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "web",
+      "xml_external_entities_disabled"
+    ],
+    "version": "1.0.0",
+    "source": "Aegis enterprise product control catalog",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05"
+  },
+  {
+    "id": "ENT-WEB-DESERIALIZE",
+    "title": "Untrusted deserialization lacks type restrictions",
+    "description": "Untrusted serialized objects may select executable types or trigger side effects during object reconstruction.",
+    "resource_type": [
+      "API",
+      "Service",
+      "Queue"
+    ],
+    "stride_category": "Elevation of Privilege",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-502"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "safe_deserialization",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "safe_deserialization"
+    ],
+    "mitigation": "Prefer schema-validated data-only formats. Where object formats are unavoidable, allowlist types and reject untrusted polymorphic metadata.",
+    "verification": "Trace all deserialization entry points and confirm unknown types and embedded object metadata are rejected before construction.",
+    "preconditions": [
+      "The affected component explicitly states that safe deserialization is absent. Confirm the described operation exists before judging exploitability."
+    ],
+    "framework_mappings": [],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/502.html",
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "web",
+      "safe_deserialization"
+    ],
+    "version": "1.0.0",
+    "source": "Aegis enterprise product control catalog",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05"
+  },
+  {
+    "id": "ENT-WEB-EXCEPTION",
+    "title": "Security decisions do not fail closed on errors",
+    "description": "An authorization dependency timeout or malformed decision may allow a protected operation if error paths grant access.",
+    "resource_type": [
+      "API",
+      "Service",
+      "Identity Provider"
+    ],
+    "stride_category": "Elevation of Privilege",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-636"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "fail_closed_error_handling",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "fail_closed_error_handling"
+    ],
+    "mitigation": "Deny protected operations on missing or failed policy decisions; return bounded errors and log decision failures without secrets.",
+    "verification": "Fault-inject policy timeouts and malformed responses; protected operations must be denied and recorded.",
+    "preconditions": [
+      "The affected component explicitly states that fail-closed error handling is absent. Confirm the described operation exists before judging exploitability."
+    ],
+    "framework_mappings": [
+      {
+        "framework": "owasp_web",
+        "version": "2025",
+        "id": "A10"
+      }
+    ],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/636.html",
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "web",
+      "fail_closed_error_handling"
+    ],
+    "version": "1.0.0",
+    "source": "Aegis enterprise product control catalog",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05"
+  },
+  {
+    "id": "ENT-WEB-RACE",
+    "title": "Sensitive state transitions lack atomic enforcement",
+    "description": "Concurrent requests may both pass a stale eligibility check and perform a one-time action more than once.",
+    "resource_type": [
+      "API",
+      "Service"
+    ],
+    "stride_category": "Tampering",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-362"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "atomic_state_transitions",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "atomic_state_transitions"
+    ],
+    "mitigation": "Use transactional conditional updates or compare-and-swap with uniqueness constraints; validate state transitions inside the transaction.",
+    "verification": "Run concurrent authorized test requests against a one-time transition; only one may commit.",
+    "preconditions": [
+      "The affected component explicitly states that atomic state transitions is absent. Confirm the described operation exists before judging exploitability."
+    ],
+    "framework_mappings": [],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/362.html",
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "web",
+      "atomic_state_transitions"
+    ],
+    "version": "1.0.0",
+    "source": "Aegis enterprise product control catalog",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05"
+  },
+  {
+    "id": "ENT-IDENTITY-PKCE",
+    "title": "OAuth authorization code flow lacks PKCE enforcement",
+    "description": "Where an authorization code can be intercepted or injected, lack of PKCE permits redemption without the legitimate client's verifier.",
+    "resource_type": [
+      "Identity Provider",
+      "API",
+      "WebClient"
+    ],
+    "stride_category": "Spoofing",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-287"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "oauth_pkce",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "oauth_pkce"
+    ],
+    "mitigation": "Enforce S256 PKCE for authorization code clients and bind code, redirect URI and client identity at redemption.",
+    "verification": "Redeem a test code with a missing or incorrect verifier; both requests must fail.",
+    "preconditions": [
+      "The affected component explicitly states that OAuth PKCE is absent. Confirm the described operation exists before judging exploitability."
+    ],
+    "framework_mappings": [],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/287.html",
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "identity",
+      "oauth_pkce"
+    ],
+    "version": "1.0.0",
+    "source": "Aegis enterprise product control catalog",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05"
+  },
+  {
+    "id": "ENT-IDENTITY-REDIRECT",
+    "title": "OAuth redirect destinations lack exact validation",
+    "description": "An attacker may redirect an authorization response to a controlled destination if redirect URIs are matched loosely.",
+    "resource_type": [
+      "Identity Provider",
+      "API"
+    ],
+    "stride_category": "Spoofing",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-601"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "redirect_uri_validation",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "redirect_uri_validation"
+    ],
+    "mitigation": "Register exact redirect URIs per client; prohibit wildcards and reject unregistered schemes, hosts and paths.",
+    "verification": "Try a lookalike host, suffix, alternate scheme and unregistered callback path; authorization must reject them.",
+    "preconditions": [
+      "The affected component explicitly states that exact redirect URI validation is absent. Confirm the described operation exists before judging exploitability."
+    ],
+    "framework_mappings": [],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/601.html",
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "identity",
+      "redirect_uri_validation"
+    ],
+    "version": "1.0.0",
+    "source": "Aegis enterprise product control catalog",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05"
+  },
+  {
+    "id": "ENT-IDENTITY-SESSION",
+    "title": "Session identifiers are not rotated at authentication changes",
+    "description": "A previously known session identifier may retain access after login or privilege elevation.",
+    "resource_type": [
+      "API",
+      "Identity Provider",
+      "Service"
+    ],
+    "stride_category": "Spoofing",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-384"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "session_id_rotation",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "session_id_rotation"
+    ],
+    "mitigation": "Generate a new session identifier on login and privilege change, retire the old identifier atomically, and preserve only explicitly safe state.",
+    "verification": "Use a pre-login identifier after authentication; it must no longer authenticate or inherit elevated privileges.",
+    "preconditions": [
+      "The affected component explicitly states that session ID rotation is absent. Confirm the described operation exists before judging exploitability."
+    ],
+    "framework_mappings": [],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/384.html",
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "identity",
+      "session_id_rotation"
+    ],
+    "version": "1.0.0",
+    "source": "Aegis enterprise product control catalog",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05"
+  },
+  {
+    "id": "ENT-IDENTITY-RECOVERY",
+    "title": "Account recovery lacks identity verification",
+    "description": "A recovery flow that does not prove account ownership can bypass otherwise strong sign-in controls.",
+    "resource_type": [
+      "API",
+      "Identity Provider"
+    ],
+    "stride_category": "Spoofing",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-640"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "account_recovery_verification",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "account_recovery_verification"
+    ],
+    "mitigation": "Use single-use, short-lived, account-bound recovery challenges; rate-limit attempts and invalidate challenges after use.",
+    "verification": "Attempt cross-account, expired and reused recovery challenges; no password or factor change may succeed.",
+    "preconditions": [
+      "The affected component explicitly states that account recovery verification is absent. Confirm the described operation exists before judging exploitability."
+    ],
+    "framework_mappings": [],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/640.html",
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "identity",
+      "account_recovery_verification"
+    ],
+    "version": "1.0.0",
+    "source": "Aegis enterprise product control catalog",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05"
+  },
+  {
+    "id": "ENT-SAAS-FUNCTION",
+    "title": "Privileged API functions lack server-side authorization",
+    "description": "An authenticated lower-privilege user may invoke an administrative function directly when authorization exists only in the interface.",
+    "resource_type": [
+      "API",
+      "Service"
+    ],
+    "stride_category": "Elevation of Privilege",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-862"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "function_level_authorization",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "function_level_authorization"
+    ],
+    "mitigation": "Enforce deny-by-default action authorization on every route and background invocation, using the authenticated subject and tenant.",
+    "verification": "Call each privileged operation as a standard user; authorization must fail before side effects occur.",
+    "preconditions": [
+      "The affected component explicitly states that function-level authorization is absent. Confirm the described operation exists before judging exploitability."
+    ],
+    "framework_mappings": [
+      {
+        "framework": "owasp_api",
+        "version": "2023",
+        "id": "API5"
+      }
+    ],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/862.html",
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "saas",
+      "function_level_authorization"
+    ],
+    "version": "1.0.0",
+    "source": "Aegis enterprise product control catalog",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05"
+  },
+  {
+    "id": "ENT-SAAS-PROPERTY",
+    "title": "Object fields lack write authorization",
+    "description": "A client may update protected ownership, role or billing fields through mass assignment.",
+    "resource_type": [
+      "API",
+      "Service"
+    ],
+    "stride_category": "Tampering",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-915"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "property_level_authorization",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "property_level_authorization"
+    ],
+    "mitigation": "Allowlist writable fields by operation and principal; set ownership and privileged attributes on the server.",
+    "verification": "Submit protected and unknown fields as an ordinary user; reject or ignore them without changing stored privileges.",
+    "preconditions": [
+      "The affected component explicitly states that property-level authorization is absent. Confirm the described operation exists before judging exploitability."
+    ],
+    "framework_mappings": [
+      {
+        "framework": "owasp_api",
+        "version": "2023",
+        "id": "API3"
+      }
+    ],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/915.html",
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "saas",
+      "property_level_authorization"
+    ],
+    "version": "1.0.0",
+    "source": "Aegis enterprise product control catalog",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05"
+  },
+  {
+    "id": "ENT-SAAS-CACHE",
+    "title": "Shared cache lacks tenant-scoped keys and access checks",
+    "description": "A cache entry reused across tenant contexts may disclose another tenant's data even when the primary database enforces authorization.",
+    "resource_type": [
+      "API",
+      "Service",
+      "Database"
+    ],
+    "stride_category": "Information Disclosure",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-639"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "tenant_cache_isolation",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "tenant_cache_isolation"
+    ],
+    "mitigation": "Include server-derived tenant and authorization scope in cache keys; enforce access checks on hits and invalidate entries on permission changes.",
+    "verification": "Prime a cache as tenant A then request the same logical object as tenant B; no A data may be returned.",
+    "preconditions": [
+      "The affected component explicitly states that tenant cache isolation is absent. Confirm the described operation exists before judging exploitability."
+    ],
+    "framework_mappings": [
+      {
+        "framework": "owasp_api",
+        "version": "2023",
+        "id": "API1"
+      }
+    ],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/639.html",
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "saas",
+      "tenant_cache_isolation"
+    ],
+    "version": "1.0.0",
+    "source": "Aegis enterprise product control catalog",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05"
+  },
+  {
+    "id": "ENT-SAAS-JOBS",
+    "title": "Background jobs lack tenant-bound authorization",
+    "description": "A queued operation may execute with a broader worker identity than the submitting tenant was authorized to use.",
+    "resource_type": [
+      "API",
+      "Service",
+      "Queue"
+    ],
+    "stride_category": "Elevation of Privilege",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-863"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "tenant_job_isolation",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "tenant_job_isolation"
+    ],
+    "mitigation": "Persist verified tenant and subject context; reauthorize sensitive work at execution and constrain worker data access.",
+    "verification": "Alter a test job's tenant or target resource; the worker must reject it and record the failed authorization.",
+    "preconditions": [
+      "The affected component explicitly states that tenant job isolation is absent. Confirm the described operation exists before judging exploitability."
+    ],
+    "framework_mappings": [
+      {
+        "framework": "owasp_api",
+        "version": "2023",
+        "id": "API1"
+      }
+    ],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/863.html",
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "saas",
+      "tenant_job_isolation"
+    ],
+    "version": "1.0.0",
+    "source": "Aegis enterprise product control catalog",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05"
+  },
+  {
+    "id": "ENT-PAYMENT-STATE",
+    "title": "Payment lifecycle transitions lack server-side validation",
+    "description": "Out-of-order or client-controlled events may mark an unpaid order as paid or refund an ineligible transaction.",
+    "resource_type": [
+      "API",
+      "Service"
+    ],
+    "stride_category": "Tampering",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-841"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "payment_state_validation",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "payment_state_validation"
+    ],
+    "mitigation": "Use an explicit server-owned payment state machine and verify the provider's authoritative status, merchant account, currency and order binding.",
+    "verification": "Deliver a failed, out-of-order and wrong-order event; fulfillment and refunds must remain blocked.",
+    "preconditions": [
+      "The affected component explicitly states that payment state validation is absent. Confirm the described operation exists before judging exploitability."
+    ],
+    "framework_mappings": [
+      {
+        "framework": "owasp_api",
+        "version": "2023",
+        "id": "API6"
+      }
+    ],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/841.html",
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "payment",
+      "payment_state_validation"
+    ],
+    "version": "1.0.0",
+    "source": "Aegis enterprise product control catalog",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05"
+  },
+  {
+    "id": "ENT-PAYMENT-RECONCILE",
+    "title": "Payment settlement discrepancies are not reconciled",
+    "description": "Missing correlation between payment events and settlement records prevents reliable investigation of missing or duplicated financial effects.",
+    "resource_type": [
+      "API",
+      "Service"
+    ],
+    "stride_category": "Repudiation",
+    "severity": "Medium",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-778"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "payment_reconciliation",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "payment_reconciliation"
+    ],
+    "mitigation": "Reconcile provider transactions with an immutable internal ledger using stable identifiers; retain discrepancy evidence and alert on mismatches.",
+    "verification": "Inject a missing settlement and duplicated ledger entry in test data; both must produce attributable reconciliation exceptions.",
+    "preconditions": [
+      "The affected component explicitly states that payment reconciliation is absent. Confirm the described operation exists before judging exploitability."
+    ],
+    "framework_mappings": [],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/778.html",
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "payment",
+      "payment_reconciliation"
+    ],
+    "version": "1.0.0",
+    "source": "Aegis enterprise product control catalog",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05"
+  },
+  {
+    "id": "ENT-SUPPLY-PIN",
+    "title": "Build dependencies lack integrity verification",
+    "description": "A changed or substituted dependency may enter a release through an unverified download or mutable reference.",
+    "resource_type": [
+      "CI/CD",
+      "Container Registry"
+    ],
+    "stride_category": "Tampering",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-494"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "dependency_integrity_verification",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "dependency_integrity_verification"
+    ],
+    "mitigation": "Pin dependencies and build images by immutable digest; verify lockfile integrity and signatures from trusted publishers.",
+    "verification": "Substitute a package or image while retaining its name; the build must reject the integrity mismatch.",
+    "preconditions": [
+      "The affected component explicitly states that dependency integrity verification is absent. Confirm the described operation exists before judging exploitability."
+    ],
+    "framework_mappings": [
+      {
+        "framework": "owasp_web",
+        "version": "2025",
+        "id": "A03"
+      },
+      {
+        "framework": "mitre_attack",
+        "version": "19.2",
+        "id": "T1195.001"
+      }
+    ],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/494.html",
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "supply",
+      "dependency_integrity_verification"
+    ],
+    "version": "1.0.0",
+    "source": "Aegis enterprise product control catalog",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05"
+  },
+  {
+    "id": "ENT-SUPPLY-PROVENANCE",
+    "title": "Deployment does not verify build provenance",
+    "description": "A signed artifact may still come from an unauthorized source or build workflow if provenance claims are not checked.",
+    "resource_type": [
+      "CI/CD",
+      "Container Registry"
+    ],
+    "stride_category": "Tampering",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-345"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "build_provenance_verification",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "build_provenance_verification"
+    ],
+    "mitigation": "Verify attestations against approved source revisions, builder identities and build parameters at deployment, not merely signature validity.",
+    "verification": "Present an artifact from an unapproved builder with a valid signature; deployment policy must reject it.",
+    "preconditions": [
+      "The affected component explicitly states that build provenance verification is absent. Confirm the described operation exists before judging exploitability."
+    ],
+    "framework_mappings": [
+      {
+        "framework": "owasp_web",
+        "version": "2025",
+        "id": "A03"
+      },
+      {
+        "framework": "mitre_attack",
+        "version": "19.2",
+        "id": "T1195.002"
+      }
+    ],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/345.html",
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "supply",
+      "build_provenance_verification"
+    ],
+    "version": "1.0.0",
+    "source": "Aegis enterprise product control catalog",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05"
+  },
+  {
+    "id": "ENT-SUPPLY-RUNNER",
+    "title": "Untrusted builds share privileged execution context",
+    "description": "Untrusted contribution code may reach release credentials, writable caches or privileged runners.",
+    "resource_type": [
+      "CI/CD"
+    ],
+    "stride_category": "Elevation of Privilege",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-269"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "untrusted_build_isolation",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "untrusted_build_isolation"
+    ],
+    "mitigation": "Run fork and untrusted builds on ephemeral isolated runners with read-only tokens and no deployment secrets; separate trusted promotion.",
+    "verification": "Inspect an untrusted test job's token, network access and caches; it must not read secrets or modify trusted release artifacts.",
+    "preconditions": [
+      "The affected component explicitly states that untrusted build isolation is absent. Confirm the described operation exists before judging exploitability."
+    ],
+    "framework_mappings": [
+      {
+        "framework": "owasp_web",
+        "version": "2025",
+        "id": "A03"
+      }
+    ],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/269.html",
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "supply",
+      "untrusted_build_isolation"
+    ],
+    "version": "1.0.0",
+    "source": "Aegis enterprise product control catalog",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05"
+  },
+  {
+    "id": "ENT-CLOUD-EXTERNAL-ID",
+    "title": "Third-party role assumption lacks customer binding",
+    "description": "A third-party cloud service may be tricked into acting for another customer when delegated role assumption lacks a customer-specific external identifier.",
+    "resource_type": [
+      "Identity Provider",
+      "Service"
+    ],
+    "stride_category": "Elevation of Privilege",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-441"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "cross_account_external_id",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "cross_account_external_id"
+    ],
+    "mitigation": "For third-party AWS role assumption, require the intended principal and a unique provider-issued external ID; do not treat the external ID as a secret.",
+    "verification": "Attempt role assumption with another customer's external ID and an unrelated principal; both must be denied.",
+    "preconditions": [
+      "The affected component explicitly states that cross-account external ID validation is absent. Confirm the described operation exists before judging exploitability."
+    ],
+    "framework_mappings": [],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/441.html",
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "cloud",
+      "cross_account_external_id"
+    ],
+    "version": "1.0.0",
+    "source": "Aegis enterprise product control catalog",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05",
+    "cloud_platform": [
+      "AWS"
+    ]
+  },
+  {
+    "id": "ENT-CLOUD-KEY-DELETE",
+    "title": "Encryption key deletion lacks protective controls",
+    "description": "A compromised authorized identity may disable recovery by deleting keys needed to decrypt production data and backups.",
+    "resource_type": [
+      "Key Management"
+    ],
+    "stride_category": "Denial of Service",
+    "severity": "Medium",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-284"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "key_deletion_protection",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "key_deletion_protection"
+    ],
+    "mitigation": "Restrict key deletion separately from key use, require approval and a recovery window, and alert on disable or deletion requests.",
+    "verification": "Use a routine workload identity to request key deletion; it must fail and privileged deletion must be auditable and recoverable.",
+    "preconditions": [
+      "The affected component explicitly states that key deletion protection is absent. Confirm the described operation exists before judging exploitability."
+    ],
+    "framework_mappings": [],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/284.html",
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "cloud",
+      "key_deletion_protection"
+    ],
+    "version": "1.0.0",
+    "source": "Aegis enterprise product control catalog",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05"
+  },
+  {
+    "id": "ENT-CLOUD-ORIGIN",
+    "title": "Origin access can bypass the protected ingress",
+    "description": "A directly reachable origin may bypass edge authentication or WAF controls if direct origin access is not restricted.",
+    "resource_type": [
+      "API",
+      "Compute",
+      "Load Balancer",
+      "Object Storage"
+    ],
+    "stride_category": "Elevation of Privilege",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-288"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "origin_access_restriction",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "origin_access_restriction"
+    ],
+    "mitigation": "Restrict origin ingress to the approved gateway or private connectivity and authenticate the gateway-to-origin hop.",
+    "verification": "Request the origin directly without the approved gateway identity; it must not serve protected application operations.",
+    "preconditions": [
+      "The affected component explicitly states that origin access restriction is absent. Confirm the described operation exists before judging exploitability."
+    ],
+    "framework_mappings": [],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/288.html",
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "cloud",
+      "origin_access_restriction"
+    ],
+    "version": "1.0.0",
+    "source": "Aegis enterprise product control catalog",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05"
+  },
+  {
+    "id": "ENT-K8S-ADMISSION",
+    "title": "Workload admission does not enforce pod security",
+    "description": "A deploy-capable identity may create workloads with host access or elevated Linux capabilities when admission permits unsafe pod settings.",
+    "resource_type": [
+      "Container Platform"
+    ],
+    "stride_category": "Elevation of Privilege",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-250"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "pod_security_enforcement",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "pod_security_enforcement"
+    ],
+    "mitigation": "Enforce restricted Pod Security Admission or equivalent admission policy; constrain host namespaces, capabilities and privileged workloads.",
+    "verification": "Submit test workloads requesting privileged mode, host PID and host path access; admission must reject unauthorized exceptions.",
+    "preconditions": [
+      "The affected component explicitly states that pod security enforcement is absent. Confirm the described operation exists before judging exploitability."
+    ],
+    "framework_mappings": [],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/250.html",
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "k8s",
+      "pod_security_enforcement"
+    ],
+    "version": "1.0.0",
+    "source": "Aegis enterprise product control catalog",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05"
+  },
+  {
+    "id": "ENT-K8S-TOKEN",
+    "title": "Workload service-account tokens lack scope restrictions",
+    "description": "A stolen broadly scoped token can impersonate a workload against unintended audiences or after its intended lifetime.",
+    "resource_type": [
+      "Container Platform",
+      "Service"
+    ],
+    "stride_category": "Spoofing",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-287"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "service_account_token_scoping",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "service_account_token_scoping"
+    ],
+    "mitigation": "Use short-lived projected tokens with explicit audiences; disable automatic mounts where unnecessary and bind RBAC to workload needs.",
+    "verification": "Verify a token is rejected by an unintended audience and after expiration; workloads not needing API access should receive no token.",
+    "preconditions": [
+      "The affected component explicitly states that service account token scoping is absent. Confirm the described operation exists before judging exploitability."
+    ],
+    "framework_mappings": [],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/287.html",
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "k8s",
+      "service_account_token_scoping"
+    ],
+    "version": "1.0.0",
+    "source": "Aegis enterprise product control catalog",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05"
+  },
+  {
+    "id": "ENT-AI-SANDBOX",
+    "title": "Agent-generated execution lacks sandbox isolation",
+    "description": "Model-influenced code or commands may access host credentials, files and network services outside the intended task.",
+    "resource_type": [
+      "ML Service",
+      "MCP Server",
+      "Tool"
+    ],
+    "stride_category": "Elevation of Privilege",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-94"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "agent_execution_sandbox",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "agent_execution_sandbox"
+    ],
+    "mitigation": "Execute untrusted code in an ephemeral constrained sandbox with no host credentials or mounts, restricted egress and CPU, memory and time limits.",
+    "verification": "Run a benign canary operation that attempts host-file and network access outside the sandbox; both must be blocked.",
+    "preconditions": [
+      "The affected component explicitly states that agent execution sandbox is absent. Confirm the described operation exists before judging exploitability."
+    ],
+    "framework_mappings": [
+      {
+        "framework": "owasp_agentic",
+        "version": "2026",
+        "id": "ASI05"
+      },
+      {
+        "framework": "owasp_llm",
+        "version": "2026",
+        "id": "LLM10"
+      },
+      {
+        "framework": "mitre_atlas",
+        "version": "2026.08",
+        "id": "AML.T0053"
+      }
+    ],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/94.html",
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "ai",
+      "agent_execution_sandbox"
+    ],
+    "version": "1.0.0",
+    "source": "Aegis enterprise product control catalog",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05"
+  },
+  {
+    "id": "ENT-AI-TOOLS",
+    "title": "MCP tool definitions are not integrity checked",
+    "description": "A changed tool description or schema can redirect an agent's behavior after initial approval without a corresponding trusted code change.",
+    "resource_type": [
+      "MCP Server",
+      "ML Service"
+    ],
+    "stride_category": "Tampering",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-345"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "mcp_tool_integrity",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "mcp_tool_integrity"
+    ],
+    "mitigation": "Pin trusted MCP server identities and tool definitions; review and reapprove material schema or capability changes before invocation.",
+    "verification": "Change an approved test tool's description or permissions; use must pause until the new definition is approved.",
+    "preconditions": [
+      "The affected component explicitly states that MCP tool definition integrity is absent. Confirm the described operation exists before judging exploitability."
+    ],
+    "framework_mappings": [
+      {
+        "framework": "owasp_agentic",
+        "version": "2026",
+        "id": "ASI04"
+      },
+      {
+        "framework": "owasp_llm",
+        "version": "2026",
+        "id": "LLM04"
+      },
+      {
+        "framework": "mitre_atlas",
+        "version": "2026.08",
+        "id": "AML.T0110"
+      }
+    ],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/345.html",
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "ai",
+      "mcp_tool_integrity"
+    ],
+    "version": "1.0.0",
+    "source": "Aegis enterprise product control catalog",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05"
+  },
+  {
+    "id": "ENT-AI-MEMORY",
+    "title": "Persistent agent memory lacks write provenance",
+    "description": "Malicious content stored as trusted memory may influence later tasks after the original input is gone.",
+    "resource_type": [
+      "ML Service"
+    ],
+    "stride_category": "Tampering",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-345"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "agent_memory_integrity",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "agent_memory_integrity"
+    ],
+    "mitigation": "Separate untrusted observations from instructions; authenticate memory writers, retain provenance and enforce scoped approval for durable instructions.",
+    "verification": "Insert an untrusted persistent instruction into test memory; subsequent tasks must not treat it as trusted policy.",
+    "preconditions": [
+      "The affected component explicitly states that agent memory integrity is absent. Confirm the described operation exists before judging exploitability."
+    ],
+    "framework_mappings": [
+      {
+        "framework": "owasp_agentic",
+        "version": "2026",
+        "id": "ASI06"
+      },
+      {
+        "framework": "mitre_atlas",
+        "version": "2026.08",
+        "id": "AML.T0080.000"
+      }
+    ],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/345.html",
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "ai",
+      "agent_memory_integrity"
+    ],
+    "version": "1.0.0",
+    "source": "Aegis enterprise product control catalog",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05"
+  },
+  {
+    "id": "ENT-AI-A2A",
+    "title": "Inter-agent messages lack authenticated sender binding",
+    "description": "An attacker may impersonate another agent or replay delegated instructions where message identity is not verified.",
+    "resource_type": [
+      "ML Service",
+      "MCP Server"
+    ],
+    "stride_category": "Spoofing",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-306"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "inter_agent_authentication",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "inter_agent_authentication"
+    ],
+    "mitigation": "Authenticate each agent and bind messages to sender, recipient, task and freshness; authorize every delegated action independently.",
+    "verification": "Send unsigned, wrong-recipient and replayed test messages; recipients must reject them before tool execution.",
+    "preconditions": [
+      "The affected component explicitly states that inter-agent authentication is absent. Confirm the described operation exists before judging exploitability."
+    ],
+    "framework_mappings": [
+      {
+        "framework": "owasp_agentic",
+        "version": "2026",
+        "id": "ASI07"
+      }
+    ],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/306.html",
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "ai",
+      "inter_agent_authentication"
+    ],
+    "version": "1.0.0",
+    "source": "Aegis enterprise product control catalog",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05"
+  },
+  {
+    "id": "ENT-AI-BUDGET",
+    "title": "Autonomous work lacks enforced resource budgets",
+    "description": "Recursive delegation or repeated tool calls may consume unbounded model tokens, paid services and execution capacity.",
+    "resource_type": [
+      "ML Service"
+    ],
+    "stride_category": "Denial of Service",
+    "severity": "Medium",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-770"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "agent_resource_budget",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "agent_resource_budget"
+    ],
+    "mitigation": "Enforce server-side per-task and per-tenant budgets for tokens, money, tool calls and wall-clock time, including child agents and retries.",
+    "verification": "Create a bounded test delegation loop; aggregate budget exhaustion must stop every descendant task.",
+    "preconditions": [
+      "The affected component explicitly states that agent resource budget is absent. Confirm the described operation exists before judging exploitability."
+    ],
+    "framework_mappings": [
+      {
+        "framework": "owasp_agentic",
+        "version": "2026",
+        "id": "ASI08"
+      },
+      {
+        "framework": "owasp_llm",
+        "version": "2026",
+        "id": "LLM06"
+      },
+      {
+        "framework": "mitre_atlas",
+        "version": "2026.08",
+        "id": "AML.T0034.002"
+      }
+    ],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/770.html",
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "ai",
+      "agent_resource_budget"
+    ],
+    "version": "1.0.0",
+    "source": "Aegis enterprise product control catalog",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05"
+  },
+  {
+    "id": "ENT-AI-CIRCUIT",
+    "title": "Agent failures lack containment and termination",
+    "description": "Repeated invalid decisions or failing dependencies can cascade across cooperating agents and downstream services.",
+    "resource_type": [
+      "ML Service"
+    ],
+    "stride_category": "Denial of Service",
+    "severity": "Medium",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-755"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "agent_circuit_breaker",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "agent_circuit_breaker"
+    ],
+    "mitigation": "Use bounded retries, validated handoffs and a server-controlled circuit breaker that cancels downstream work; keep an independent operator stop mechanism.",
+    "verification": "Fault-inject a repeatedly failing tool; downstream work must halt within the configured failure budget.",
+    "preconditions": [
+      "The affected component explicitly states that agent circuit breaker is absent. Confirm the described operation exists before judging exploitability."
+    ],
+    "framework_mappings": [
+      {
+        "framework": "owasp_agentic",
+        "version": "2026",
+        "id": "ASI08"
+      }
+    ],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/755.html",
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "ai",
+      "agent_circuit_breaker"
+    ],
+    "version": "1.0.0",
+    "source": "Aegis enterprise product control catalog",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05"
+  },
+  {
+    "id": "ENT-DATA-RETENTION",
+    "title": "Sensitive data retention is not enforced",
+    "description": "Copies retained beyond their authorized purpose increase exposure through replicas, exports and backups.",
+    "resource_type": [
+      "Database",
+      "Object Storage",
+      "Service"
+    ],
+    "stride_category": "Information Disclosure",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-359"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "retention_enforcement",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "retention_enforcement"
+    ],
+    "mitigation": "Define enforceable retention per data class and apply deletion across primary stores, replicas and exports with documented backup expiration.",
+    "verification": "Age synthetic records past their retention period and verify deletion or justified legal hold across all scoped copies.",
+    "preconditions": [
+      "The affected component explicitly states that retention enforcement is absent. Confirm the described operation exists before judging exploitability."
+    ],
+    "framework_mappings": [],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/359.html",
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "data",
+      "retention_enforcement"
+    ],
+    "version": "1.0.0",
+    "source": "Aegis enterprise product control catalog",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05"
+  },
+  {
+    "id": "ENT-DATA-RESTORE",
+    "title": "Backup restoration lacks destination authorization",
+    "description": "A privileged restore path may disclose tenant data into an environment or account with weaker access controls.",
+    "resource_type": [
+      "Database",
+      "Object Storage",
+      "Service"
+    ],
+    "stride_category": "Elevation of Privilege",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-863"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "restore_authorization",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "restore_authorization"
+    ],
+    "mitigation": "Authorize source data and destination independently for each restore; preserve tenant boundaries, encryption and audit attribution.",
+    "verification": "Attempt a tenant A restore into tenant B or an unauthorized environment; the operation must be rejected.",
+    "preconditions": [
+      "The affected component explicitly states that restore authorization is absent. Confirm the described operation exists before judging exploitability."
+    ],
+    "framework_mappings": [],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/863.html",
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "data",
+      "restore_authorization"
+    ],
+    "version": "1.0.0",
+    "source": "Aegis enterprise product control catalog",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05"
+  },
+  {
+    "id": "ENT-DEVICE-BOOT",
+    "title": "Device boot does not verify software integrity",
+    "description": "An attacker with firmware update or local write access may persist modified device software across reboots.",
+    "resource_type": [
+      "IoT Device"
+    ],
+    "stride_category": "Tampering",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-494"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "verified_boot",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "verified_boot"
+    ],
+    "mitigation": "Verify boot-chain signatures against a protected root of trust and enforce rollback protection with a documented recovery path.",
+    "verification": "Boot an altered or rolled-back test image; the device must reject it without disabling authorized recovery.",
+    "preconditions": [
+      "The affected component explicitly states that verified boot is absent. Confirm the described operation exists before judging exploitability."
+    ],
+    "framework_mappings": [],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/494.html",
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "device",
+      "verified_boot"
+    ],
+    "version": "1.0.0",
+    "source": "Aegis enterprise product control catalog",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05"
+  },
+  {
+    "id": "ENT-DEVICE-IDENTITY",
+    "title": "Devices lack unique provisioned credentials",
+    "description": "Shared device credentials let compromise of one unit impersonate other deployed devices.",
+    "resource_type": [
+      "IoT Device"
+    ],
+    "stride_category": "Spoofing",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-798"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "unique_device_credentials",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "unique_device_credentials"
+    ],
+    "mitigation": "Provision per-device identities and revocable credentials, protect private keys and avoid universal recovery passwords.",
+    "verification": "Use one test device's credentials for another device identity; backend authentication must reject the substitution.",
+    "preconditions": [
+      "The affected component explicitly states that unique device credentials is absent. Confirm the described operation exists before judging exploitability."
+    ],
+    "framework_mappings": [],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/798.html",
+      "https://owasp.org/www-project-application-security-verification-standard/"
+    ],
+    "tags": [
+      "device",
+      "unique_device_credentials"
+    ],
+    "version": "1.0.0",
+    "source": "Aegis enterprise product control catalog",
+    "review_status": "automated_contract_review",
+    "last_reviewed": "2026-09-05"
+  }
+]

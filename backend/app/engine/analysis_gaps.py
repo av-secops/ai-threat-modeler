@@ -5,11 +5,17 @@ def detect_missing_elements(system_model) -> List[Dict[str, str]]:
     gaps: List[Dict[str, str]] = []
     components = system_model.components or []
     flows = system_model.flows or []
+    metadata = system_model.metadata or {}
+    unresolved = metadata.get('unresolved_references') or []
+    if unresolved:
+        gaps.append({'type': 'unresolved_iac_values', 'message': f'{len(unresolved)} IaC properties are unresolved. Supply resolved plan values; missing values were not treated as secure or insecure.'})
+    for limitation in metadata.get('analysis_limits') or []:
+        gaps.append({'type': 'input_analysis_limit', 'message': str(limitation)})
 
     if components and not flows:
         gaps.append({
             "type": "missing_data_flows",
-            "message": "No explicit data flows were provided; communication paths were inferred heuristically.",
+            "message": "No data flows are modeled. Supply explicit communication paths; resource dependencies alone are not data flows.",
         })
     elif any(getattr(flow, "assumed", False) for flow in flows):
         gaps.append({

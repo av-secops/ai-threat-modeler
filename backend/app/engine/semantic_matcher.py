@@ -9,9 +9,24 @@ Replaces brute-force rule iteration with:
 """
 
 import logging
-import os
 import re
+import time
 from typing import List, Dict, Tuple, Optional, Any
+
+from . import model_policy
+from .hybrid_retrieval import BM25Index, reciprocal_rank_fusion, security_tokens
+from .retrieval_config import (
+    configured_profile,
+    configured_reranker_model,
+    fusion_weights,
+)
+from .retrieval_quality import (
+    RetrievalCalibrator,
+    hierarchical_chunks,
+    retrieval_monitor,
+    rule_provenance,
+    security_domains_for_text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -24,19 +39,22 @@ except ImportError:
 
 SECURITY_DOMAINS = {
     "aws", "azure", "gcp", "web_api", "identity", "data", "payments",
-    "ai_llm", "agent_mcp", "container", "supply_chain", "general",
+    "ai_llm", "agent_mcp", "container", "serverless", "infrastructure",
+    "supply_chain", "general",
 }
 SPECIALIST_DOMAINS = {
     "aws", "azure", "gcp", "identity", "payments", "ai_llm", "agent_mcp",
-    "container", "supply_chain",
+    "container", "serverless", "infrastructure", "supply_chain", "web_api", "data",
 }
 
 
 class SecurityReranker:
     """Second-stage reranker with an optional cross-encoder and safe fallback."""
 
+    DEFAULT_MODEL = "BAAI/bge-reranker-base"
+
     def __init__(self):
-        self.model_name = os.getenv("AEGIS_THREAT_RERANKER_MODEL", "").strip()
+        self.model_name = configured_reranker_model()
         self.model = None
         self.error = None
         if not self.model_name:
@@ -57,6 +75,15 @@ class SecurityReranker:
     @property
     def backend(self) -> str:
         return "cross_encoder" if self.model is not None else "security_feature_reranker"
+
+    @property
+    def status(self) -> Dict[str, Any]:
+        return {
+            "backend": self.backend,
+            "model": self.model_name,
+            "loaded": self.model is not None,
+            "error": self.error,
+        }
 
     def rerank(
         self,
@@ -84,17 +111,64 @@ class SecurityReranker:
             signal_overlap = _jaccard(query_tokens, signal_terms)
             tag_overlap = _jaccard(query_tokens, tag_terms)
             lexical_overlap = _jaccard(query_tokens, document_tokens)
+            query_coverage = len(query_tokens & document_tokens) / max(1, len(query_tokens))
+            title = str(original.get("title") or original.get("threat_name") or "").lower()
+            title_match = bool(title and title in query.lower())
             if cross_scores is not None:
                 model_score = 1.0 / (1.0 + np.exp(-float(cross_scores[index])))
                 score = retrieval_score * 0.55 + model_score * 0.45
             else:
-                score = retrieval_score * 0.72 + lexical_overlap * 0.12 + signal_overlap * 0.1 + tag_overlap * 0.06
+                score = (
+                    retrieval_score * 0.58 + lexical_overlap * 0.08
+                    + signal_overlap * 0.08 + tag_overlap * 0.04
+                    + query_coverage * 0.16 + (0.12 if title_match else 0.0)
+                )
             enriched = dict(metadata)
             enriched["retrieval_score"] = round(float(retrieval_score), 6)
             enriched["reranker_backend"] = self.backend
             enriched["reranker_score"] = round(float(score), 6)
+            enriched["query_coverage"] = round(float(query_coverage), 6)
+            enriched["exact_title_match"] = title_match
             reranked.append((enriched, max(0.0, min(1.0, float(score)))))
         return sorted(reranked, key=lambda item: item[1], reverse=True)
+
+    def rerank_batch(
+        self,
+        batches: List[Tuple[str, List[Tuple[Dict[str, Any], float]]]],
+    ) -> List[List[Tuple[Dict[str, Any], float]]]:
+        """Run one cross-encoder call for all queries instead of one per scope."""
+        if self.model is None:
+            return [self.rerank(query, candidates) for query, candidates in batches]
+        pairs, spans = [], []
+        for query, candidates in batches:
+            start = len(pairs)
+            pairs.extend([
+                [query, _retrieval_document(item[0].get("original") or item[0])]
+                for item in candidates
+            ])
+            spans.append((start, len(pairs)))
+        try:
+            scores = self.model.predict(pairs) if pairs else []
+        except Exception as exc:
+            logger.warning("Batch cross-encoder reranking failed: %s", exc)
+            return [self.rerank(query, candidates) for query, candidates in batches]
+        output = []
+        model, self.model = self.model, None
+        try:
+            for (query, candidates), (start, end) in zip(batches, spans):
+                reranked = []
+                for index, (metadata, retrieval_score) in enumerate(candidates):
+                    model_score = 1.0 / (1.0 + np.exp(-float(scores[start + index])))
+                    score = retrieval_score * 0.55 + model_score * 0.45
+                    enriched = dict(metadata)
+                    enriched["retrieval_score"] = round(float(retrieval_score), 6)
+                    enriched["reranker_backend"] = "cross_encoder"
+                    enriched["reranker_score"] = round(float(score), 6)
+                    reranked.append((enriched, max(0.0, min(1.0, float(score)))))
+                output.append(sorted(reranked, key=lambda item: item[1], reverse=True))
+        finally:
+            self.model = model
+        return output
 
 
 class SemanticThreatMatcher:
@@ -108,16 +182,22 @@ class SemanticThreatMatcher:
         self._kb_vectorized = False
         self._vector_store = None
         self._domain_stores: Dict[str, Any] = {}
+        self._lexical_index = BM25Index()
         self._embedding_service = None
         self._reranker = SecurityReranker()
+        self._calibrator = RetrievalCalibrator()
+        self._cache_status = "not_built"
+        self._retrieval_schema = "hybrid-bm25-rrf-rerank-4.0"
         self._initialize()
     
     def _initialize(self):
         """Initialize embedding service and vector store."""
         try:
-            from .embedding_service import get_embedding_service, get_or_create_vector_store
+            from .embedding_service import VectorStore, get_embedding_service
             self._embedding_service = get_embedding_service()
-            self._vector_store = get_or_create_vector_store(self._embedding_service.dimension)
+            # Each matcher owns its index. A process-global store makes a
+            # second matcher append duplicate knowledge-base vectors.
+            self._vector_store = VectorStore(self._embedding_service.dimension)
             logger.info("Semantic threat matcher initialized")
         except Exception as e:
             logger.warning(f"Failed to initialize semantic threat matcher: {e}")
@@ -127,45 +207,18 @@ class SemanticThreatMatcher:
         Vectorize all threats in the knowledge base for semantic search.
         Should be called once at startup.
         """
-        if self._kb_vectorized or not self._embedding_service or not self._vector_store:
+        if self._kb_vectorized:
             return
         
         if not threats:
             logger.warning("No threats to vectorize")
             return
         
-        logger.info(f"Vectorizing {len(threats)} threats...")
-        
-        # Create rich text representations for each threat
-        texts = []
-        metadata = []
-        
+        logger.info("Indexing %s threats for hybrid retrieval", len(threats))
+        texts: List[str] = []
+        metadata: List[Dict[str, Any]] = []
         for threat in threats:
-            # Build a comprehensive text representation
-            parts = [
-                threat.get('threat_name', threat.get('threat', {}).get('title', '')),
-                threat.get('description', threat.get('attack_vector', '')),
-                threat.get('threat', {}).get('description', ''),
-                f"Component: {threat.get('component', '')}",
-                f"Category: {threat.get('stride_category', threat.get('category', ''))}",
-                f"Severity: {threat.get('impact', threat.get('risk', {}).get('severity', ''))}",
-            ]
-            
-            # Add tags if available
-            tags = threat.get('tags', [])
-            if tags:
-                parts.append(f"Tags: {', '.join(tags)}")
-            
-            # Add mitigation info
-            mitigations = threat.get('mitigations', [])
-            if mitigations and isinstance(mitigations, list):
-                for m in mitigations[:2]:  # Only first 2 to keep text manageable
-                    if isinstance(m, dict):
-                        parts.append(m.get('description', ''))
-            
-            text = ' '.join(filter(None, parts))
-            texts.append(text)
-            
+            texts.append(_retrieval_document(threat))
             domains = _threat_domains(threat)
             metadata.append({
                 'threat_id': threat.get('threat_id', threat.get('id', '')),
@@ -174,62 +227,87 @@ class SemanticThreatMatcher:
                 'category': threat.get('stride_category', threat.get('category', '')),
                 'severity': threat.get('impact', threat.get('risk', {}).get('severity', 'Medium')),
                 'domains': domains,
-                'original': threat  # Keep reference to original
+                'original': threat,
             })
-        
-        # Check if we can load from disk cache
+
+        self._lexical_index.build(texts, metadata)
+
         import hashlib
         import json
         import pickle
         from pathlib import Path
-        
+
+        cache_file = None
         try:
-            # Create a simple hash of the threats to detect changes
-            kb_summary = {
-                "retrieval_schema": "security-domain-rerank-2.1",
-                "threats": [
-                    {
-                        "id": t.get("id"), "title": t.get("title"),
-                        "components": t.get("components"), "cloud": t.get("cloud_platform"),
-                        "tags": t.get("tags"), "applicability": t.get("applicability"),
-                    }
-                    for t in threats
-                ],
-            }
-            kb_hash = hashlib.md5(json.dumps(kb_summary, sort_keys=True).encode()).hexdigest()
+            signature = self._embedding_service.index_signature if self._embedding_service else None
+            kb_hash = hashlib.sha256(json.dumps({
+                "retrieval_schema": self._retrieval_schema, "embedding": signature,
+            }, sort_keys=True).encode()).hexdigest()[:24]
             cache_dir = Path(__file__).parent.parent / "knowledge_base" / "cache"
             cache_dir.mkdir(exist_ok=True, parents=True)
-            cache_file = cache_dir / f"kb_{kb_hash}.pkl"
-            
-            if cache_file.exists():
+            cache_file = cache_dir / f"kb_incremental_{kb_hash}.pkl"
+
+            if cache_file.exists() and self._embedding_service and self._vector_store:
                 with open(cache_file, 'rb') as f:
-                    embeddings, cached_metadata = pickle.load(f)
-                self._vector_store.add(embeddings, cached_metadata)
-                self._build_domain_stores(embeddings, cached_metadata)
+                    cached = pickle.load(f)
+                if not isinstance(cached, dict):
+                    raise ValueError("legacy cache format")
+                if cached.get("schema") != self._retrieval_schema:
+                    raise ValueError("retrieval schema changed")
+                if cached.get("embedding") != self._embedding_service.index_signature:
+                    raise ValueError("embedding model signature changed")
+                records = cached.get("records") or {}
+                vectors, changed_texts, changed_indexes = [None] * len(texts), [], []
+                for index, (item, text) in enumerate(zip(metadata, texts)):
+                    document_hash = hashlib.sha256(text.encode()).hexdigest()
+                    record = records.get(item["threat_id"]) or {}
+                    vector = np.asarray(record.get("vector"), dtype=np.float32)
+                    if record.get("document_hash") == document_hash and vector.shape == (self._embedding_service.dimension,):
+                        vectors[index] = vector
+                    else:
+                        changed_indexes.append(index)
+                        changed_texts.append(text)
+                if changed_texts:
+                    changed_vectors = self._embedding_service.embed_batch(changed_texts)
+                    for index, vector in zip(changed_indexes, changed_vectors):
+                        vectors[index] = vector
+                embeddings = np.asarray(vectors, dtype=np.float32)
+                self._vector_store.add(embeddings, metadata)
+                self._build_domain_stores(embeddings, metadata)
                 self._kb_vectorized = True
-                logger.info(f"Loaded {len(threats)} vectors from cache. Vector store size: {self._vector_store.size}")
+                self._cache_status = f"incremental:{len(changed_indexes)}_changed"
+                if changed_indexes:
+                    self._write_incremental_cache(cache_file, texts, metadata, embeddings)
+                logger.info("Loaded %s vectors; re-embedded %s changed records", len(metadata), len(changed_indexes))
                 return
         except Exception as e:
-            logger.warning(f"Cache check failed: {e}")
-        
-        # Batch embed
+            self._cache_status = "miss"
+            logger.info("Embedding cache not reusable: %s", e)
+
         try:
+            if not self._embedding_service or not self._vector_store:
+                raise RuntimeError("dense embedding service is unavailable")
             embeddings = self._embedding_service.embed_batch(texts)
             self._vector_store.add(embeddings, metadata)
             self._build_domain_stores(embeddings, metadata)
             self._kb_vectorized = True
-            
-            # Save to cache
+
             try:
-                if 'cache_file' in locals():
+                if cache_file:
                     with open(cache_file, 'wb') as f:
-                        pickle.dump((embeddings, metadata), f)
+                        pickle.dump(self._incremental_cache_payload(texts, metadata, embeddings), f)
+                    self._cache_status = "created"
             except Exception as e:
-                logger.warning(f"Failed to save embeddings cache: {e}")
-                
-            logger.info(f"Vectorized {len(threats)} threats. Vector store size: {self._vector_store.size}")
+                logger.warning("Failed to save embeddings cache: %s", e)
+
+            logger.info(
+                "Indexed %s dense vectors and %s lexical documents",
+                self._vector_store.size, self._lexical_index.size,
+            )
         except Exception as e:
-            logger.error(f"Failed to vectorize knowledge base: {e}")
+            self._kb_vectorized = self._lexical_index.size > 0
+            self._cache_status = "lexical_only"
+            logger.warning("Dense indexing failed; BM25 retrieval remains active: %s", e)
 
     def _build_domain_stores(self, embeddings, metadata: List[Dict[str, Any]]) -> None:
         """Build small domain indexes so unrelated security packs do not compete."""
@@ -258,6 +336,8 @@ class SemanticThreatMatcher:
         stride_category: str = None,
         cloud_provider: str = None,
         security_domains: Optional[List[str]] = None,
+        _rerank: bool = True,
+        _query_embedding=None,
     ) -> List[Tuple[Dict, float]]:
         """
         Find the most relevant threats for a component using semantic search.
@@ -270,37 +350,55 @@ class SemanticThreatMatcher:
         Returns:
             List of (threat_metadata, similarity_score) tuples
         """
-        if not self._embedding_service or not self._vector_store or self._vector_store.size == 0:
+        dense_ready = bool(
+            self._embedding_service and self._vector_store and self._vector_store.size
+        )
+        if not dense_ready and self._lexical_index.size == 0:
             return []
         
         # Build query text
-        query_parts = [component_description]
-        if component_type:
-            query_parts.insert(0, f"Component type: {component_type}")
-        query = ' '.join(query_parts)
+        query = _build_query(component_description, component_type)
         
+        started = time.perf_counter()
         # Search
         try:
-            query_embedding = self._embedding_service.embed(query)
-            # Retrieve a wider semantic pool before applying hard metadata
-            # filters; filtering only a tiny top-k can hide applicable rules.
             domains = set(security_domains or _query_domains(query, component_type, cloud_provider))
-            stores = [self._domain_stores[name] for name in sorted(domains) if name in self._domain_stores]
-            if not stores:
-                stores = [self._vector_store]
-            result_by_id: Dict[str, Tuple[Dict[str, Any], float]] = {}
-            for store in stores:
-                for meta, score in store.search(query_embedding, top_k=max(top_k * 6, 60)):
-                    threat_id = meta.get("threat_id") or meta.get("threat_name")
-                    current = result_by_id.get(threat_id)
-                    if current is None or score > current[1]:
-                        result_by_id[threat_id] = (meta, score)
-            results = list(result_by_id.values())
-            
-            # Filter by component type if specified
+            candidate_limit = max(top_k * configured_profile().candidate_multiplier, 60)
+            dense_results: List[Tuple[Dict[str, Any], float]] = []
+            if dense_ready:
+                query_embedding = (
+                    _query_embedding
+                    if _query_embedding is not None
+                    else self._embedding_service.embed_query(query)
+                )
+                stores = [
+                    self._domain_stores[name]
+                    for name in sorted(domains)
+                    if name in self._domain_stores
+                ] or [self._vector_store]
+                result_by_id: Dict[str, Tuple[Dict[str, Any], float]] = {}
+                for store in stores:
+                    for meta, score in store.search(query_embedding, top_k=candidate_limit):
+                        threat_id = _retrieval_identity(meta)
+                        current = result_by_id.get(threat_id)
+                        if current is None or score > current[1]:
+                            result_by_id[threat_id] = (meta, score)
+                dense_results = sorted(
+                    result_by_id.values(), key=lambda item: item[1], reverse=True,
+                )[:candidate_limit]
+
+            lexical_results = self._lexical_index.search(query, top_k=candidate_limit)
+            dense_weight, lexical_weight = fusion_weights(
+                getattr(self._embedding_service, "backend", "unavailable")
+            )
+            results = reciprocal_rank_fusion([
+                ("dense", dense_results, dense_weight),
+                ("bm25", lexical_results, lexical_weight),
+            ], identity=_retrieval_identity)
+
             filtered = []
             query_tokens = _tokens(query)
-            for meta, semantic_score in results:
+            for meta, fusion_score in results:
                 original = meta.get("original") or meta
                 if component_type and not _component_filter_matches(original, component_type):
                     continue
@@ -317,25 +415,31 @@ class SemanticThreatMatcher:
                     "incompatible_component", "incompatible_cloud", "unrelated_security_domain",
                 )):
                     continue
-                document = " ".join([
-                    str(original.get("title") or original.get("threat_name") or ""),
-                    str(original.get("description") or ""),
-                    " ".join(original.get("tags") or []),
-                    " ".join(original.get("components") or []),
-                ])
-                lexical = _jaccard(query_tokens, _tokens(document))
-                component_bonus = 0.1 if component_type and _component_filter_matches(original, component_type, exact_only=True) else 0.0
-                category_bonus = 0.1 if stride_category and category == stride_category else 0.0
-                domain_bonus = 0.08 if domains & set(meta.get("domains") or []) else 0.0
+                source_scores = meta.get("retrieval_sources") or {}
+                semantic_score = float((source_scores.get("dense") or {}).get("score") or 0.0)
+                lexical_score = float((source_scores.get("bm25") or {}).get("score") or 0.0)
+                lexical_overlap = _jaccard(query_tokens, _tokens(_retrieval_document(original)))
+                component_bonus = 0.08 if component_type and _component_filter_matches(original, component_type, exact_only=True) else 0.0
+                category_bonus = 0.06 if stride_category and category == stride_category else 0.0
+                domain_bonus = 0.06 if domains & set(meta.get("domains") or []) else 0.0
                 negative_penalty = min(0.35, 0.12 * len(hard_negative_reasons))
                 hybrid_score = max(0.0, min(
                     1.0,
-                    float(semantic_score) * 0.58 + lexical * 0.22
+                    float(fusion_score) * 0.72
+                    + max(0.0, semantic_score) * 0.08
+                    + lexical_score * 0.06
+                    + lexical_overlap * 0.04
                     + component_bonus + category_bonus + domain_bonus - negative_penalty,
                 ))
                 enriched = dict(meta)
                 enriched["semantic_score"] = float(semantic_score)
-                enriched["lexical_score"] = lexical
+                enriched["lexical_score"] = lexical_score
+                enriched["lexical_overlap"] = lexical_overlap
+                enriched["fusion_score"] = float(fusion_score)
+                enriched["fusion_weights"] = {
+                    "dense": round(dense_weight, 4),
+                    "bm25": round(lexical_weight, 4),
+                }
                 enriched["retrieval_scope"] = {
                     "component_type": component_type,
                     "stride_category": stride_category,
@@ -343,12 +447,42 @@ class SemanticThreatMatcher:
                     "security_domains": sorted(domains),
                 }
                 enriched["hard_negative_reasons"] = hard_negative_reasons
+                enriched["rule_provenance"] = rule_provenance(original)
                 filtered.append((enriched, hybrid_score))
-            reranked = self._reranker.rerank(query, filtered)
-            return reranked[:top_k]
+            threshold = self._calibrator.threshold(domains, stride_category)
+            reranked = self._reranker.rerank(query, filtered) if _rerank else filtered
+            accepted = [item for item in reranked if item[1] >= threshold][:top_k]
+            for metadata_item, _ in accepted:
+                metadata_item["calibrated_threshold"] = threshold
+            retrieval_monitor.record(
+                latency_ms=(time.perf_counter() - started) * 1000,
+                results=len(accepted),
+                fallback=getattr(self._embedding_service, "backend", "") != "sentence_transformer",
+                cache=self._cache_status,
+            )
+            return accepted
         except Exception as e:
             logger.error(f"Semantic search failed: {e}")
             return []
+
+    def find_relevant_threats_batch(self, requests: List[Dict[str, Any]]) -> List[List[Tuple[Dict, float]]]:
+        """Batch query embeddings and optional neural reranking across all scopes."""
+        queries = [_build_query(item["query"], item.get("component_type")) for item in requests]
+        embeddings = None
+        if self._embedding_service and self._vector_store and self._vector_store.size:
+            embeddings = self._embedding_service.embed_queries(queries)
+        candidates = []
+        for index, request in enumerate(requests):
+            candidates.append(self.find_relevant_threats(
+                request["query"], request.get("component_type"), request.get("top_k", 5) * 2,
+                request.get("stride_category"), request.get("cloud_provider"),
+                request.get("security_domains"), _rerank=False,
+                _query_embedding=embeddings[index] if embeddings is not None else None,
+            ))
+        reranked = self._reranker.rerank_batch([
+            (request["query"], items) for request, items in zip(requests, candidates)
+        ])
+        return [items[:request.get("top_k", 5)] for request, items in zip(requests, reranked)]
     def find_threats_for_architecture(
         self,
         architecture_text: str,
@@ -358,25 +492,19 @@ class SemanticThreatMatcher:
         Find relevant threats for an entire architecture description.
         Useful for RAG — retrieving context for LLM prompts.
         """
-        if not self._embedding_service or not self._vector_store or self._vector_store.size == 0:
+        if not self._kb_vectorized:
             return []
         
         try:
             text = architecture_text or ""
-            chunk_size = 1800
-            overlap = 250
-            chunks = []
-            start = 0
-            while start < len(text):
-                chunks.append(text[start:start + chunk_size])
-                start += chunk_size - overlap
-            chunks = chunks or [""]
+            chunks = hierarchical_chunks(text)
 
             best_by_id: Dict[str, Tuple[Dict, float]] = {}
             for chunk in chunks:
-                query_embedding = self._embedding_service.embed(chunk)
-                for metadata, score in self._vector_store.search(query_embedding, top_k=top_k):
-                    threat_id = metadata.get("threat_id") or metadata.get("id") or metadata.get("threat_name")
+                for metadata, score in self.find_relevant_threats(chunk["text"], top_k=top_k):
+                    metadata = dict(metadata)
+                    metadata["document_chunk"] = {key: chunk[key] for key in ("id", "section", "sha256")}
+                    threat_id = _retrieval_identity(metadata)
                     current = best_by_id.get(threat_id)
                     if current is None or score > current[1]:
                         best_by_id[threat_id] = (metadata, score)
@@ -384,6 +512,50 @@ class SemanticThreatMatcher:
         except Exception as e:
             logger.error(f"Architecture threat search failed: {e}")
             return []
+
+    def diagnostics(self) -> Dict[str, Any]:
+        embedding = self._embedding_service
+        dense_weight, lexical_weight = fusion_weights(
+            getattr(embedding, "backend", "unavailable")
+        )
+        return {
+            "status": "active" if self._kb_vectorized else "not_ready",
+            "schema": self._retrieval_schema,
+            "profile": configured_profile().name,
+            "strategy": "BM25 + dense embeddings + reciprocal-rank fusion + reranking",
+            "embedding_model": getattr(embedding, "model_name", None),
+            "embedding_backend": getattr(embedding, "backend", "unavailable"),
+            "embedding_dimension": getattr(embedding, "dimension", None),
+            "query_instruction": bool(getattr(embedding, "query_instruction", "")),
+            "dense_vectors": getattr(self._vector_store, "size", 0),
+            "lexical_documents": self._lexical_index.size,
+            "fusion_weights": {
+                "dense": round(dense_weight, 4), "bm25": round(lexical_weight, 4),
+            },
+            "reranker": self._reranker.status,
+            "cache": self._cache_status,
+            "monitoring": retrieval_monitor.snapshot(),
+            "calibration": self._calibrator.data,
+        }
+
+    def _incremental_cache_payload(self, texts, metadata, embeddings) -> Dict[str, Any]:
+        import hashlib
+        return {
+            "schema": self._retrieval_schema,
+            "embedding": self._embedding_service.index_signature,
+            "records": {
+                item["threat_id"]: {
+                    "document_hash": hashlib.sha256(text.encode()).hexdigest(),
+                    "vector": vector,
+                }
+                for item, text, vector in zip(metadata, texts, embeddings)
+            },
+        }
+
+    def _write_incremental_cache(self, cache_file, texts, metadata, embeddings) -> None:
+        import pickle
+        with open(cache_file, "wb") as handle:
+            pickle.dump(self._incremental_cache_payload(texts, metadata, embeddings), handle)
     
     def compute_threat_similarity(self, threat1_text: str, threat2_text: str) -> float:
         """
@@ -603,10 +775,32 @@ def _component_filter_matches(threat: Dict[str, Any], component_type: str, exact
         "container platform": {"kubernetes", "container", "k8s"},
         "database": {"data store", "sql database", "nosql database"},
         "object storage": {"storage", "cloud storage", "file storage", "bucket"},
-        "data flow": {"flow", "interaction", "communication"},
+        "data flow": {
+            "flow", "interaction", "communication", "api", "service",
+            "webclient", "database", "object storage", "queue",
+        },
     }
     compatible = aliases.get(normalized_actual, set())
     return bool(normalized_expected & compatible)
+
+
+def _retrieval_identity(metadata: Dict[str, Any]) -> str:
+    original = metadata.get("original") or metadata
+    return str(
+        metadata.get("threat_id")
+        or original.get("id")
+        or original.get("threat_id")
+        or metadata.get("threat_name")
+        or original.get("title")
+        or ""
+    )
+
+
+def _build_query(component_description: str, component_type: Optional[str]) -> str:
+    parts = [component_description]
+    if component_type:
+        parts.insert(0, f"Component type: {component_type}")
+    return " ".join(parts)
 
 
 def _retrieval_document(threat: Dict[str, Any]) -> str:
@@ -624,24 +818,7 @@ def _retrieval_document(threat: Dict[str, Any]) -> str:
 
 
 def _threat_domains(threat: Dict[str, Any]) -> List[str]:
-    text = _retrieval_document(threat).lower()
-    domains = set()
-    mappings = {
-        "aws": ("aws", "amazon", "s3", "lambda", "dynamodb", "cloudtrail", "kms", "iam", "ec2"),
-        "azure": ("azure", "entra", "key vault", "aks", "blob storage"),
-        "gcp": ("gcp", "google cloud", "vertex", "gke", "bigquery", "cloud run"),
-        "web_api": ("api", "graphql", "sql injection", "xss", "ssrf", "csrf", "web"),
-        "identity": ("identity", "oauth", "oidc", "saml", "jwt", "session", "authentication", "authorization"),
-        "data": ("database", "storage", "postgres", "mongo", "redis", "encryption", "data leak"),
-        "payments": ("payment", "stripe", "refund", "webhook", "pci", "cardholder"),
-        "ai_llm": ("llm", "prompt injection", "model", "rag", "vector store", "inference"),
-        "agent_mcp": ("agent", "mcp", "tool call", "tool execution", "memory service"),
-        "container": ("kubernetes", "k8s", "container", "pod", "service account", "docker"),
-        "supply_chain": ("supply chain", "dependency", "artifact", "image signature", "ci/cd", "registry"),
-    }
-    for domain, terms in mappings.items():
-        if any(_contains_term(text, term) for term in terms):
-            domains.add(domain)
+    domains = set(security_domains_for_text(_retrieval_document(threat)))
     return sorted((domains or {"general"}) & SECURITY_DOMAINS)
 
 
@@ -673,7 +850,7 @@ def _hard_negative_reasons(
     scoped_query_domains = query_domains - {"general"}
     threat_specialists = threat_domains & SPECIALIST_DOMAINS
     query_specialists = scoped_query_domains & SPECIALIST_DOMAINS
-    if threat_specialists and not threat_specialists & query_specialists:
+    if threat_specialists and query_specialists and not threat_specialists & query_specialists:
         reasons.append("unrelated_security_domain")
     elif threat_domains and scoped_query_domains and not threat_domains & scoped_query_domains:
         reasons.append("unrelated_security_domain")
@@ -693,10 +870,7 @@ def _normalize_type(value: Any) -> str:
 
 
 def _tokens(value: str) -> set[str]:
-    return {
-        token for token in re.findall(r"[a-z0-9]+", value.lower())
-        if len(token) > 2 and token not in {"the", "and", "for", "with", "from", "component", "service"}
-    }
+    return set(security_tokens(value))
 
 
 def _jaccard(left: set[str], right: set[str]) -> float:

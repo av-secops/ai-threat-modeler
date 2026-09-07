@@ -24,7 +24,7 @@ const exposureLabels = {
  * they wait on, a hundred unresolved cells become a handful of questions, and
  * answering one resolves many.
  */
-export default function EvidenceRequests({ evidenceRequests, cardClassName }) {
+export default function EvidenceRequests({ evidenceRequests, cardClassName, onClarify }) {
     const [expanded, setExpanded] = useState(() => new Set());
 
     const requests = evidenceRequests?.requests || [];
@@ -43,6 +43,7 @@ export default function EvidenceRequests({ evidenceRequests, cardClassName }) {
             <div className="flex items-center gap-2">
                 <ClipboardList className="h-5 w-5 text-brand-primary" />
                 <h3 className="text-lg font-bold text-brand-950 dark:text-white">Evidence requests</h3>
+                {onClarify && <button type="button" className="ui-button-secondary ml-auto" onClick={onClarify}><CheckCircle2 size={16} />Answer questions</button>}
             </div>
             <p className="mt-2 text-sm leading-6 text-brand-600 dark:text-brand-400">
                 {evidenceRequests.summary}

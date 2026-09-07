@@ -30,6 +30,24 @@ CLASSIFIED_CASES = [
     ('the network is flat with no segmentation between tiers', 'GENERIC-NETWORK-SEGMENTATION-001'),
     ('the service accepts webhook callbacks from Stripe without signature verification',
      'GENERIC-MISSING-INTEGRITY-VERIFICATION-001'),
+    ('the workspace filter is applied only after vector retrieval, allowing another tenant records',
+     'GENERIC-TENANT-ISOLATION-001'),
+    ('retrieved support tickets are inserted into system instructions without separating instructions',
+     'GENERIC-INDIRECT-PROMPT-INJECTION-001'),
+    ('the model chooses shell tool arguments without server-side authorization or an allowlist',
+     'GENERIC-AGENT-TOOL-AUTHORIZATION-001'),
+    ('one owner-scoped GitHub token is reused across every tenant',
+     'GENERIC-DELEGATED-CREDENTIAL-SHARING-001'),
+    ('approval is only in the browser and the API accepts direct calls without checking identity',
+     'GENERIC-APPROVAL-BYPASS-001'),
+    ('traces retain prompts, OAuth tokens and complete tool output',
+     'GENERIC-SENSITIVE-TELEMETRY-001'),
+    ('MCP servers are not mutually authenticated and responses have no integrity signature',
+     'GENERIC-MCP-PEER-AUTHENTICITY-001'),
+    ('signed evidence URLs remain valid after the user is disabled',
+     'GENERIC-REVOCABLE-SIGNED-LINK-001'),
+    ('recursive agent tool loops have no token budget or tenant quota',
+     'GENERIC-AGENT-RESOURCE-EXHAUSTION-001'),
 ]
 
 # Statements describing a control that is present must not be read as a weakness.
@@ -114,6 +132,16 @@ def test_unclassified_known_issues_are_numbered_individually():
     ids = [issue['suggested_threat_id'] for issue in issues]
 
     assert ids == ['UNCLASSIFIED-KNOWN-ISSUE-001', 'UNCLASSIFIED-KNOWN-ISSUE-002']
+
+
+def test_request_header_tenant_scope_is_classified_as_bola():
+    issues = ArchitectureParser().parse_known_issues(
+        'Known issues:\n'
+        '- Tenant ID is accepted from a request header without server-side ownership validation.\n'
+    )
+
+    assert issues[0]['suggested_threat_id'] == 'API-BOLA-TENANT-CONTROL-001'
+    assert issues[0]['category'] == 'Elevation of Privilege'
 
 
 def test_owasp_category_follows_the_cwe_rather_than_a_fixed_default():

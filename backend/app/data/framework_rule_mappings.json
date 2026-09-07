@@ -1,0 +1,311 @@
+{
+  "version": "1.0.0",
+  "review_status": "automated_contract_review",
+  "notice": "Explicit Aegis mappings to versioned framework categories. Not a compliance assessment or independent expert certification.",
+  "rules": {
+    "OWASP-API-001": [
+      {
+        "framework": "owasp_api",
+        "version": "2023",
+        "id": "API1"
+      }
+    ],
+    "OWASP-API-002": [
+      {
+        "framework": "owasp_api",
+        "version": "2023",
+        "id": "API2"
+      }
+    ],
+    "OWASP-API-003": [
+      {
+        "framework": "owasp_api",
+        "version": "2023",
+        "id": "API3"
+      }
+    ],
+    "OWASP-API-004": [
+      {
+        "framework": "owasp_api",
+        "version": "2023",
+        "id": "API4"
+      }
+    ],
+    "OWASP-API-005": [
+      {
+        "framework": "owasp_api",
+        "version": "2023",
+        "id": "API5"
+      }
+    ],
+    "OWASP-API-006": [
+      {
+        "framework": "owasp_api",
+        "version": "2023",
+        "id": "API6"
+      }
+    ],
+    "OWASP-API-007": [
+      {
+        "framework": "owasp_api",
+        "version": "2023",
+        "id": "API7"
+      }
+    ],
+    "OWASP-API-008": [
+      {
+        "framework": "owasp_api",
+        "version": "2023",
+        "id": "API8"
+      }
+    ],
+    "OWASP-API-009": [
+      {
+        "framework": "owasp_api",
+        "version": "2023",
+        "id": "API9"
+      }
+    ],
+    "OWASP-API-010": [
+      {
+        "framework": "owasp_api",
+        "version": "2023",
+        "id": "API10"
+      }
+    ],
+    "AI-001": [
+      {
+        "framework": "owasp_llm",
+        "version": "2026",
+        "id": "LLM01"
+      },
+      {
+        "framework": "mitre_atlas",
+        "version": "2026.08",
+        "id": "AML.T0051"
+      }
+    ],
+    "AI-002": [
+      {
+        "framework": "owasp_llm",
+        "version": "2026",
+        "id": "LLM01"
+      },
+      {
+        "framework": "mitre_atlas",
+        "version": "2026.08",
+        "id": "AML.T0051"
+      }
+    ],
+    "AI-003": [
+      {
+        "framework": "owasp_llm",
+        "version": "2026",
+        "id": "LLM08"
+      },
+      {
+        "framework": "mitre_atlas",
+        "version": "2026.08",
+        "id": "AML.T0056"
+      }
+    ],
+    "AI-004": [
+      {
+        "framework": "owasp_llm",
+        "version": "2026",
+        "id": "LLM02"
+      }
+    ],
+    "AI-005": [
+      {
+        "framework": "owasp_llm",
+        "version": "2026",
+        "id": "LLM05"
+      }
+    ],
+    "AI-006": [
+      {
+        "framework": "owasp_llm",
+        "version": "2026",
+        "id": "LLM01"
+      }
+    ],
+    "AI-007": [
+      {
+        "framework": "owasp_llm",
+        "version": "2026",
+        "id": "LLM06"
+      },
+      {
+        "framework": "mitre_atlas",
+        "version": "2026.08",
+        "id": "AML.T0029"
+      }
+    ],
+    "AI-TOOL-001": [
+      {
+        "framework": "owasp_llm",
+        "version": "2026",
+        "id": "LLM03"
+      }
+    ],
+    "AI-RAG-001": [
+      {
+        "framework": "owasp_llm",
+        "version": "2026",
+        "id": "LLM09"
+      }
+    ],
+    "RAG-001": [
+      {
+        "framework": "owasp_llm",
+        "version": "2026",
+        "id": "LLM09"
+      },
+      {
+        "framework": "owasp_llm",
+        "version": "2026",
+        "id": "LLM05"
+      }
+    ],
+    "RAG-002": [
+      {
+        "framework": "owasp_llm",
+        "version": "2026",
+        "id": "LLM09"
+      }
+    ],
+    "RAG-003": [
+      {
+        "framework": "owasp_llm",
+        "version": "2026",
+        "id": "LLM01"
+      }
+    ],
+    "RAG-004": [
+      {
+        "framework": "owasp_llm",
+        "version": "2026",
+        "id": "LLM09"
+      },
+      {
+        "framework": "owasp_llm",
+        "version": "2026",
+        "id": "LLM02"
+      }
+    ],
+    "AI-DATA-001": [
+      {
+        "framework": "owasp_llm",
+        "version": "2026",
+        "id": "LLM02"
+      }
+    ],
+    "WEB-API-012": [
+      {
+        "framework": "owasp_llm",
+        "version": "2026",
+        "id": "LLM10"
+      }
+    ],
+    "AGENT-001": [
+      {
+        "framework": "owasp_agentic",
+        "version": "2026",
+        "id": "ASI02"
+      },
+      {
+        "framework": "owasp_agentic",
+        "version": "2026",
+        "id": "ASI03"
+      },
+      {
+        "framework": "mitre_atlas",
+        "version": "2026.08",
+        "id": "AML.T0053"
+      }
+    ],
+    "AGENT-002": [
+      {
+        "framework": "owasp_agentic",
+        "version": "2026",
+        "id": "ASI06"
+      },
+      {
+        "framework": "mitre_atlas",
+        "version": "2026.08",
+        "id": "AML.T0080.000"
+      }
+    ],
+    "AGENT-003": [
+      {
+        "framework": "owasp_agentic",
+        "version": "2026",
+        "id": "ASI01"
+      }
+    ],
+    "AGENT-004": [
+      {
+        "framework": "owasp_agentic",
+        "version": "2026",
+        "id": "ASI03"
+      }
+    ],
+    "AGENT-005": [
+      {
+        "framework": "owasp_agentic",
+        "version": "2026",
+        "id": "ASI08"
+      }
+    ],
+    "PRO-AGENT-TOOL-AUTHZ": [
+      {
+        "framework": "owasp_agentic",
+        "version": "2026",
+        "id": "ASI02"
+      }
+    ],
+    "PRO-AGENT-CONTEXT": [
+      {
+        "framework": "owasp_agentic",
+        "version": "2026",
+        "id": "ASI01"
+      }
+    ],
+    "PRO-AGENT-APPROVAL": [
+      {
+        "framework": "owasp_agentic",
+        "version": "2026",
+        "id": "ASI09"
+      }
+    ],
+    "PRO-AGENT-MEMORY": [
+      {
+        "framework": "owasp_agentic",
+        "version": "2026",
+        "id": "ASI06"
+      }
+    ],
+    "MCP-001": [
+      {
+        "framework": "owasp_agentic",
+        "version": "2026",
+        "id": "ASI03"
+      }
+    ],
+    "MCP-002": [
+      {
+        "framework": "owasp_agentic",
+        "version": "2026",
+        "id": "ASI05"
+      }
+    ],
+    "MCP-003": [
+      {
+        "framework": "owasp_agentic",
+        "version": "2026",
+        "id": "ASI03"
+      }
+    ]
+  }
+}

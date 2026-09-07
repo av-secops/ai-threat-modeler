@@ -7,7 +7,7 @@ import { aiLensTone, severityTheme } from './theme';
 export const SeverityBadge = ({ severity }) => {
     const theme = severityTheme[severity] || severityTheme.Low;
     return (
-        <span className={clsx('inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-bold uppercase tracking-[0.18em]', theme.badge)}>
+        <span className={clsx('inline-flex items-center rounded-full border px-2 py-1 text-[11px] font-bold uppercase tracking-normal', theme.badge)}>
             {severity}
         </span>
     );

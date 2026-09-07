@@ -22,6 +22,13 @@ def main():
 
     analyzer = ThreatAnalyzer()
     stats = analyzer.reload_local_intelligence()
+    # The request path initializes models lazily; this maintenance command must
+    # actually refresh derived artifacts before reporting completion.
+    local = analyzer.local_intelligence
+    local._ensure_initialized()
+    stats["retrieval"] = local.matcher.diagnostics() if local.matcher else {"status": "unavailable"}
+    stats["stride_classifier_ready"] = bool(local.classifier and local.classifier.is_trained)
+    stats["initialization_errors"] = list(local.initialization_errors)
     print(json.dumps(stats, indent=2))
 
 

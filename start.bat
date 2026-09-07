@@ -1,172 +1,66 @@
 @echo off
-setlocal enabledelayedexpansion
+setlocal
+set "LAUNCHER=%~dp0start.ps1"
+set "BACKEND_PORT=8000"
+set "FRONTEND_PORT=5173"
+set "OPTIONS="
 
-REM Default ports
-set BACKEND_PORT=8000
-set FRONTEND_PORT=5173
-set PYTHONUTF8=1
-set PYTHON_CMD=python
+:parse
+if "%~1"=="" goto launch
+if /i "%~1"=="--backend-port" goto backend
+if /i "%~1"=="-b" goto backend
+if /i "%~1"=="--frontend-port" goto frontend
+if /i "%~1"=="-f" goto frontend
+if /i "%~1"=="--check" goto check
+if /i "%~1"=="--stop" goto stop
+if /i "%~1"=="--install" goto install
+if /i "%~1"=="--no-browser" goto no_browser
+if /i "%~1"=="--help" goto help
+echo ERROR: Unknown option "%~1". Run start.bat --help.
+exit /b 2
 
-py -3 --version >nul 2>&1
-if not errorlevel 1 (
-    set PYTHON_CMD=py -3
-)
-
-REM Parse command line arguments
-:parse_args
-if "%~1"=="" goto end_parse
-if /i "%~1"=="--backend-port" (
-    set BACKEND_PORT=%~2
-    shift
-    shift
-    goto parse_args
-)
-if /i "%~1"=="--frontend-port" (
-    set FRONTEND_PORT=%~2
-    shift
-    shift
-    goto parse_args
-)
-if /i "%~1"=="-b" (
-    set BACKEND_PORT=%~2
-    shift
-    shift
-    goto parse_args
-)
-if /i "%~1"=="-f" (
-    set FRONTEND_PORT=%~2
-    shift
-    shift
-    goto parse_args
-)
-if /i "%~1"=="--help" (
-    echo Usage: start.bat [options]
-    echo.
-    echo Options:
-    echo   --backend-port, -b PORT    Backend server port [default 8000]
-    echo   --frontend-port, -f PORT   Frontend server port [default 5173]
-    echo   --help                     Show this help message
-    echo.
-    echo Examples:
-    echo   start.bat
-    echo   start.bat --backend-port 3000
-    echo   start.bat -b 3000 -f 3001
-    exit /b 0
-)
+:backend
+if "%~2"=="" goto missing_value
+set "BACKEND_PORT=%~2"
 shift
-goto parse_args
-:end_parse
+shift
+goto parse
 
-echo =====================================================
-echo   Aegis Threat v2.0
-echo   NLP ^| Semantic Search ^| Attack Chains ^| Multi-LLM
-echo =====================================================
-echo.
+:frontend
+if "%~2"=="" goto missing_value
+set "FRONTEND_PORT=%~2"
+shift
+shift
+goto parse
 
-REM Check if Python is installed
-%PYTHON_CMD% --version >nul 2>&1
-if errorlevel 1 (
-    echo ERROR: Python is not installed or not in PATH
-    echo Please install Python 3.8 or higher
-    pause
-    exit /b 1
-)
+:check
+set "OPTIONS=%OPTIONS% -Check"
+shift
+goto parse
 
-REM Check if Node.js is installed
-node --version >nul 2>&1
-if errorlevel 1 (
-    echo ERROR: Node.js is not installed or not in PATH
-    echo Please install Node.js 18 or higher
-    pause
-    exit /b 1
-)
+:stop
+set "OPTIONS=%OPTIONS% -Stop"
+shift
+goto parse
 
-echo [1/4] Checking dependencies...
-echo.
+:install
+set "OPTIONS=%OPTIONS% -InstallDependencies"
+shift
+goto parse
 
-REM Check if backend directory exists
-if not exist "backend\app" (
-    echo ERROR: Backend directory not found
-    pause
-    exit /b 1
-)
+:no_browser
+set "OPTIONS=%OPTIONS% -NoBrowser"
+shift
+goto parse
 
-REM Check if backend dependencies are installed in the same Python used to run the backend
-%PYTHON_CMD% -c "import fastapi, uvicorn, networkx, pydantic, yaml, docx, pypdf" >nul 2>&1
-if errorlevel 1 (
-    echo Installing backend dependencies...
-    cd backend
-    %PYTHON_CMD% -m pip install -r requirements.txt
-    if errorlevel 1 (
-        echo ERROR: Failed to install backend dependencies
-        cd ..
-        pause
-        exit /b 1
-    )
-    cd ..
-)
+:help
+powershell.exe -NoProfile -File "%LAUNCHER%" -Help
+exit /b %errorlevel%
 
-REM Check if frontend dependencies are installed
-if not exist "node_modules" (
-    echo Installing frontend dependencies...
-    call npm install
-    if errorlevel 1 (
-        echo ERROR: Failed to install frontend dependencies
-        pause
-        exit /b 1
-    )
-)
+:missing_value
+echo ERROR: A port number is required after "%~1".
+exit /b 2
 
-echo Port Configuration:
-echo   Backend Port:  %BACKEND_PORT%
-echo   Frontend Port: %FRONTEND_PORT%
-echo.
-
-echo [2/4] Starting Backend Server on port %BACKEND_PORT%...
-echo.
-start "Aegis Threat - Backend" cmd /k "cd backend && set PYTHONUTF8=1&& %PYTHON_CMD% -m uvicorn app.main:app --reload --port %BACKEND_PORT%"
-
-REM Wait for backend to start
-timeout /t 3 /nobreak >nul
-
-echo [3/4] Starting Frontend Server on port %FRONTEND_PORT%...
-echo.
-start "Aegis Threat - Frontend" cmd /k "set VITE_API_URL=http://127.0.0.1:%BACKEND_PORT%&& set VITE_WS_URL=ws://127.0.0.1:%BACKEND_PORT%&& npm run dev -- --port %FRONTEND_PORT%"
-
-REM Wait for frontend to start
-timeout /t 3 /nobreak >nul
-
-echo.
-echo =====================================================
-echo   Aegis Threat - Running!
-echo =====================================================
-echo.
-echo Backend:  http://127.0.0.1:%BACKEND_PORT%
-echo Frontend: http://localhost:%FRONTEND_PORT%
-echo API Docs: http://127.0.0.1:%BACKEND_PORT%/docs
-echo.
-echo Features:
-echo   - Hybrid NLP parsing (BlingFire + transformers + rules)
-echo   - Semantic threat matching (sentence-transformers + FAISS)
-echo   - Attack chain analysis (NetworkX)
-echo   - STRIDE-based threat analysis
-echo   - CWE, MITRE ATT^&CK, OWASP, NIST compliance mapping
-echo   - Multi-LLM integration with RAG (OpenAI, Claude, Gemini)
-echo   - PDF reports with architecture diagrams
-echo.
-echo Press any key to open the application in your browser...
-pause >nul
-
-REM Open the application in default browser
-start http://localhost:%FRONTEND_PORT%
-
-echo.
-echo Application opened in browser.
-echo.
-echo To stop the servers, close the terminal windows.
-echo.
-echo Examples:
-echo   start.bat
-echo   start.bat --backend-port 3000
-echo   start.bat -b 3000 -f 3001
-echo.
+:launch
+powershell.exe -NoProfile -File "%LAUNCHER%" -BackendPort "%BACKEND_PORT%" -FrontendPort "%FRONTEND_PORT%" %OPTIONS%
+exit /b %errorlevel%

@@ -36,15 +36,18 @@ FLOW_VERBS: Tuple[Tuple[str, str, bool], ...] = (
     (r'caches?\s+(?:\w+\s+){0,3}?(?:in|into)', 'TCP', False),
     (r'queries', 'TCP', False),
     (r'reads?\s+(?:\w+\s+){0,3}?from', 'TCP', True),
+    (r'reads?', 'TCP', True),
     (r'loads?\s+(?:\w+\s+){0,3}?from', 'TCP', True),
     (r'fetches\s+(?:\w+\s+){0,3}?from', 'HTTPS', True),
     (r'pulls?\s+(?:\w+\s+){0,3}?from', 'HTTPS', True),
     (r'retrieves?\s+(?:\w+\s+){0,3}?from', 'HTTPS', True),
     (r'consumes?\s+(?:\w+\s+){0,3}?from', 'TCP', True),
+    (r'consumes?', 'TCP', True),
     (r'subscribes?\s+to', 'TCP', True),
     (r'authenticates?\s+(?:\w+\s+){0,3}?(?:against|with|via|through|using)', 'HTTPS', False),
     (r'connects?\s+to', 'TCP', False),
     (r'communicates?\s+with', 'HTTPS', False),
+    (r'exchanges?\s+(?:\w+\s+){0,3}?with', 'HTTPS', False),
     (r'integrates?\s+with', 'HTTPS', False),
     (r'replicates?\s+(?:\w+\s+){0,3}?to', 'TCP', False),
     (r'streams?\s+(?:\w+\s+){0,3}?to', 'TCP', False),
@@ -66,10 +69,15 @@ _WEAK_TOKENS = frozenset({
 })
 
 _PROTOCOL_OVERRIDES: Tuple[Tuple[str, str], ...] = (
+    (r'\bmtls\b|\bmutual\s+tls\b', 'MTLS'),
+    (r'\bgrpcs\b|\bgrpc\s+(?:over|with)\s+tls\b', 'GRPCS'),
+    (r'\bwss\b|\bsecure\s+websockets?\b', 'WSS'),
+    (r'\bws\b', 'WS'),
+    (r'\btls\b', 'TLS'),
     (r'\bover\s+https\b|\bvia\s+https\b|\bhttps\b', 'HTTPS'),
     (r'\bover\s+http\b(?!s)|\bplain\s+http\b', 'HTTP'),
     (r'\bgrpc\b', 'GRPC'),
-    (r'\bwebsocket', 'WSS'),
+    (r'\bwebsockets?\b', 'WS'),
     (r'\bamqp\b', 'AMQP'),
     (r'\bmqtt\b', 'MQTT'),
     (r'\bsftp\b', 'SFTP'),
@@ -290,13 +298,13 @@ def extract_stated_flows(text: str, components: Dict[str, Any]) -> List[Dict[str
     index = alias_index(components)
     stated: Dict[Tuple[str, str], Dict[str, Any]] = {}
 
-    def record(source: str, sink: str, protocol: str, clause: str, verb: str) -> None:
+    def record(source: str, sink: str, protocol: str, clause: str, verb: str, transport_text: str = None) -> None:
         if source == sink or (source, sink) in stated:
             return
         stated[(source, sink)] = {
             'source_id': source,
             'target_id': sink,
-            'protocol': _protocol_in(clause, protocol),
+            'protocol': _protocol_in(clause if transport_text is None else transport_text, protocol),
             'evidence': clause,
             'verb': verb,
         }
@@ -314,6 +322,8 @@ def extract_stated_flows(text: str, components: Dict[str, Any]) -> List[Dict[str
         for position, verb in enumerate(verbs):
             protocol, is_reversed = _verb_at(verb)
             next_verb = verbs[position + 1] if position + 1 < len(verbs) else None
+            if re.search(r'\b(?:not|never|cannot|can\x27t|don\x27t|doesn\x27t)\s+(?:directly\s+)?$', clause[:verb.start()], re.IGNORECASE):
+                continue
             relative = _relative_subject(clause, mentions, verb)
             if relative is not None:
                 subjects = [relative]
@@ -335,7 +345,7 @@ def extract_stated_flows(text: str, components: Dict[str, Any]) -> List[Dict[str
                 for target in targets:
                     objects.add(target)
                     source, sink = (target, subject) if is_reversed else (subject, target)
-                    record(source, sink, protocol, clause, ' '.join(verb.group(0).split()).lower())
+                    record(source, sink, protocol, clause, ' '.join(verb.group(0).split()).lower(), clause[0 if position == 0 else verb.start():limit])
     return list(stated.values())
 
 
@@ -374,7 +384,9 @@ _COORDINATION_RE = re.compile(
 
 # "an API gateway which routes to the payments service": the pronoun stands for
 # the noun just named, making it the subject of the verb that follows.
-_RELATIVE_RE = re.compile(r'^[\s,]*(?:which|that|who)\s*$', re.IGNORECASE)
+_RELATIVE_RE = re.compile(
+    r'^[\s,]*(?:(?:over|via|using)\s+\w+[\s,]+)?(?:which|that|who)\s*$', re.IGNORECASE,
+)
 
 
 def _relative_subject(

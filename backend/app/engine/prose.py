@@ -91,6 +91,45 @@ def sentences(text: str) -> Tuple[str, ...]:
     )
 
 
+def architecture_assertions(text: str) -> str:
+    """Omit explicit non-deployment clauses, not missing-control statements.
+
+    The original input remains the evidence source. This view is for entity
+    discovery, where a negated technology mention is not a deployed component.
+    """
+    # Preserve bullets, wrapping, delimiters and source offsets. Formatting can
+    # determine whether the next line is a separate component or a modifier.
+    parts = re.split(r'((?<=[.!?])\s+|;\s*|\s+(?:but|whereas)\s+|\r?\n)', text, flags=re.IGNORECASE)
+    for index in range(0, len(parts), 2):
+        clause = parts[index]
+        stripped = clause.strip(' -*')
+        # Non-deployment is different from a component not using a control.
+        # Leave the latter intact for the control-polarity reader.
+        if re.search(
+            r'\b(?:authentication|authorization|mfa|2fa|encryption|tls|mtls|'
+            r'validation|sanitization|rate limiting|audit logging|rotation)\b',
+            clause, re.IGNORECASE,
+        ):
+            continue
+        not_deployed = re.match(
+            r'^(?:there\s+(?:is|are)\s+)?no\s+.+?\s+(?:(?:is|are)\s+)?'
+            r'(?:used|deployed|present|installed|in\s+scope)\b'
+            r'|^.+?\s+(?:is|are)\s+not\s+(?:used|deployed|present|installed|in\s+scope)\b',
+            stripped, re.IGNORECASE,
+        )
+        if not_deployed:
+            parts[index] = ' ' * len(clause)
+            continue
+        unused = re.search(
+            r'\b(?:do|does|did)\s+not\s+(?:use|deploy|run|integrate)\b'
+            r'|\b(?:don\x27t|doesn\x27t)\s+(?:use|deploy|run|integrate)\b',
+            clause, re.IGNORECASE,
+        )
+        if unused:
+            parts[index] = clause[:unused.start()] + ' ' * (len(clause) - unused.start())
+    return ''.join(parts)
+
+
 def divide_on_new_subject(sentence: str) -> List[str]:
     """Split where a conjunction hands the sentence to a new subject."""
     parts: List[str] = []

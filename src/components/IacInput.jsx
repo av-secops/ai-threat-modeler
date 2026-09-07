@@ -5,11 +5,12 @@ const IacInput = ({ onAnalyze, isAnalyzing }) => {
     const [iacContent, setIacContent] = useState('');
     const [projectName, setProjectName] = useState('My IaC Audit');
     const [formatHint, setFormatHint] = useState('auto');
+    const [projectFiles, setProjectFiles] = useState([]);
 
     const handleSubmit = (e) => {
         e.preventDefault();
         if (iacContent.trim()) {
-            onAnalyze(iacContent, projectName, formatHint);
+            onAnalyze(iacContent, projectName, formatHint, projectFiles);
         }
     };
 
@@ -17,14 +18,16 @@ const IacInput = ({ onAnalyze, isAnalyzing }) => {
         if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
             e.preventDefault();
             if (iacContent.trim() && !isAnalyzing) {
-                onAnalyze(iacContent, projectName, formatHint);
+                onAnalyze(iacContent, projectName, formatHint, projectFiles);
             }
         }
     };
 
     const handleFileUpload = (e) => {
-        const file = e.target.files[0];
+        const files = Array.from(e.target.files || []);
+        const file = files[0];
         if (!file) return;
+        setProjectFiles(files);
 
         // Auto-detect format from filename.
         const filename = file.name.toLowerCase();
@@ -34,9 +37,12 @@ const IacInput = ({ onAnalyze, isAnalyzing }) => {
             setFormatHint('cloudformation');
         } else if (filename.includes('compose')) {
             setFormatHint('docker-compose');
+        } else if (filename.endsWith('.bicep')) {
+            setFormatHint('bicep');
+        } else if (filename.includes('jenkins') || filename.includes('gitlab')) {
+            setFormatHint('ci');
         } else if (filename.endsWith('.yaml') || filename.endsWith('.yml')) {
-            // Default to k8s for generic yamls unless it explicitly says compose
-            setFormatHint('kubernetes');
+            setFormatHint('auto');
         }
 
         const reader = new FileReader();
@@ -55,7 +61,7 @@ const IacInput = ({ onAnalyze, isAnalyzing }) => {
                         Infrastructure-as-Code Analysis
                     </h2>
                     <p className="mt-2 max-w-3xl text-sm leading-6 text-brand-600 dark:text-brand-400">
-                        Upload or paste Docker Compose, Kubernetes, Terraform, or CloudFormation to generate resource-level security findings.
+                        Upload one file or a related IaC project. Terraform references are resolved across files and every finding keeps its source filename.
                     </p>
                 </div>
                 
@@ -63,6 +69,7 @@ const IacInput = ({ onAnalyze, isAnalyzing }) => {
                     <label className="ui-label">Project Name</label>
                     <input
                         type="text"
+                        aria-label="IaC project name"
                         value={projectName}
                         onChange={(e) => setProjectName(e.target.value)}
                         className="input-brand w-full font-mono"
@@ -77,16 +84,17 @@ const IacInput = ({ onAnalyze, isAnalyzing }) => {
                             <span className="flex items-center space-x-2">
                                 <Upload className="w-4 h-4 text-brand-500" />
                                 <span className="text-sm font-medium text-brand-600 dark:text-brand-300">
-                                    Drop IaC file or click to browse
+                                    {projectFiles.length > 1 ? `${projectFiles.length} project files selected` : projectFiles[0]?.name || 'Drop IaC files or click to browse'}
                                 </span>
                             </span>
-                            <input type="file" name="file_upload" className="hidden" accept=".yaml,.yml,.json,.tf,.tfvars" onChange={handleFileUpload} />
+                            <input type="file" name="file_upload" className="hidden" multiple accept=".yaml,.yml,.json,.tf,.tfvars,.hcl,.bicep,.ts,.js,.py" onChange={handleFileUpload} />
                         </label>
                     </div>
                     
                     <div>
                         <label className="ui-label">Format Hint</label>
                         <select 
+                            aria-label="IaC format"
                             value={formatHint} 
                             onChange={(e) => setFormatHint(e.target.value)}
                             className="input-brand w-full font-mono text-sm py-2"
@@ -94,8 +102,14 @@ const IacInput = ({ onAnalyze, isAnalyzing }) => {
                             <option value="auto">Auto-detect</option>
                             <option value="docker-compose">Docker Compose</option>
                             <option value="kubernetes">Kubernetes</option>
+                            <option value="helm">Helm template</option>
                             <option value="terraform">Terraform</option>
+                            <option value="terraform-plan">Terraform plan JSON</option>
                             <option value="cloudformation">CloudFormation</option>
+                            <option value="arm">Azure ARM</option>
+                            <option value="bicep">Bicep</option>
+                            <option value="pulumi">Pulumi</option>
+                            <option value="ci">CI pipeline</option>
                         </select>
                     </div>
                 </div>
@@ -110,6 +124,7 @@ const IacInput = ({ onAnalyze, isAnalyzing }) => {
                             <Code className="w-4 h-4" />
                         </div>
                         <textarea
+                            aria-label="IaC source"
                             className="input-brand h-72 w-full resize-y bg-brand-50 font-mono text-sm leading-relaxed dark:bg-brand-900/50"
                             placeholder={'resource "aws_s3_bucket" "uploads" {\n  bucket = "customer-uploads"\n}\n'}
                             value={iacContent}
@@ -124,7 +139,7 @@ const IacInput = ({ onAnalyze, isAnalyzing }) => {
                         <span className="text-xs font-medium uppercase tracking-wide text-brand-400">Ctrl+Enter to submit</span>
                         <button
                             type="submit"
-                            disabled={isAnalyzing || !iacContent.trim()}
+                            disabled={isAnalyzing || (!iacContent.trim() && projectFiles.length === 0)}
                             className={`inline-flex items-center justify-center gap-2 rounded-lg bg-brand-success px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-green-600 ${isAnalyzing ? 'cursor-not-allowed opacity-50' : ''}`}
                         >
                             {isAnalyzing ? (
@@ -132,7 +147,7 @@ const IacInput = ({ onAnalyze, isAnalyzing }) => {
                             ) : (
                                 <>
                                     <Send className="w-4 h-4" />
-                                    Analyze Infrastructure
+                                    Review infrastructure
                                 </>
                             )}
                         </button>

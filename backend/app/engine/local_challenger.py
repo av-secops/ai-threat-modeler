@@ -21,17 +21,34 @@ class LocalChallenger:
             for cell in coverage["cells"] if cell["status"] == "unknown"
         }
         review_candidates = []
+        components = {item.id: item for item in architecture.components or []}
+        thresholds = {
+            "Spoofing": 0.68, "Tampering": 0.68, "Repudiation": 0.72,
+            "Information Disclosure": 0.7, "Denial of Service": 0.72,
+            "Elevation of Privilege": 0.7,
+        }
         for rule in retrieved_rules:
-            score = float(rule.get("retrieval_score") or 0)
-            if score < 0.4:
-                continue
             category = rule.get("stride_category") or rule.get("category")
             for scope in rule.get("retrieved_for") or []:
+                score = float(
+                    (rule.get("retrieval_scores_by_scope") or {}).get(
+                        scope, rule.get("retrieval_score") or 0,
+                    )
+                )
+                threshold = thresholds.get(category, 0.7)
+                if score < threshold:
+                    continue
                 element_id, separator, retrieved_category = scope.rpartition(":")
                 if not separator or retrieved_category != category:
                     continue
                 cell = unknown.get((element_id, category))
                 if not cell:
+                    continue
+                component = components.get(element_id)
+                if component and not self._rule_applies(rule, component):
+                    continue
+                required = (rule.get("applicability") or {}).get("required_signals", [])
+                if not required and score < 0.8:
                     continue
                 review_candidates.append({
                     "candidate_rule_id": rule["id"],
@@ -40,7 +57,7 @@ class LocalChallenger:
                     "stride_category": category,
                     "retrieval_score": round(score, 4),
                     "status": "information_required",
-                    "required_evidence": (rule.get("applicability") or {}).get("required_signals", []),
+                    "required_evidence": required,
                     "negating_controls": rule.get("negating_controls") or [],
                     "question": f"Is {rule['title']} applicable to {cell['element_name']}, and what source or configuration evidence proves or negates it?",
                 })
@@ -63,7 +80,34 @@ class LocalChallenger:
         }
 
     @staticmethod
+    def _rule_applies(rule: Dict[str, Any], component) -> bool:
+        allowed = {
+            str(item).lower().replace("_", " ")
+            for item in (
+                (rule.get("applicability") or {}).get("element_types")
+                or rule.get("components") or []
+            )
+        }
+        actual = str(component.type or "").lower().replace("_", " ")
+        generic = {"any", "component", "system"}
+        if allowed and not (allowed & generic) and actual not in allowed:
+            aliases = {
+                "service": {"api", "microservice", "serverless", "worker"},
+                "container": {"container platform", "kubernetes workload"},
+                "database": {"db", "data warehouse"},
+            }
+            if not any(actual in aliases.get(item, set()) or item in aliases.get(actual, set()) for item in allowed):
+                return False
+        expected_clouds = {
+            str(item).lower() for item in (rule.get("cloud_platform") or []) if item
+        }
+        actual_cloud = str((component.properties or {}).get("cloud_provider") or "").lower()
+        return not expected_clouds or not actual_cloud or actual_cloud in expected_clouds
+
+    @staticmethod
     def _omitted_literal_components(architecture) -> List[Dict[str, str]]:
+        if (architecture.metadata or {}).get("authoritative_model"):
+            return []
         source = str((architecture.metadata or {}).get("architecture_text") or "").lower()
         # A name resolved to something other than a component of its own is
         # accounted for, not omitted: the system's own name is not a data store
@@ -113,17 +157,25 @@ class LocalChallenger:
         # components such as "Settlement Worker" are the omissions that
         # previously went unreported, so review them by role vocabulary too.
         for candidate in find_named_roles(source):
+            phrase = str(candidate.get("phrase") or "").strip()
+            words = phrase.split()
+            if (
+                not phrase or len(words) > 5
+                or words[0] in {"and", "or", "from", "for", "to", "with", "without"}
+                or any(word in {"call", "calls", "reach", "reaches", "use", "uses", "may", "can"} for word in words)
+            ):
+                continue
             if already_represented(candidate, architecture.components or []):
                 continue
             if any(
-                item["technology"] in candidate["phrase"] or candidate["phrase"] in item["technology"]
+                item["technology"] in phrase or phrase in item["technology"]
                 for item in omitted
             ):
                 continue
             omitted.append({
-                "technology": candidate["phrase"],
+                "technology": phrase,
                 "expected_type": candidate["type"],
-                "source_evidence": candidate["phrase"],
+                "source_evidence": phrase,
                 "status": "extraction_review_required",
             })
         return omitted

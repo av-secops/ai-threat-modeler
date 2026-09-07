@@ -1665,19 +1665,9 @@
                         "value": "internal"
                     },
                     {
-                        "operator": "OR",
-                        "conditions": [
-                            {
-                                "field": "authenticated",
-                                "op": "==",
-                                "value": false
-                            },
-                            {
-                                "field": "authenticated",
-                                "op": "exists",
-                                "value": false
-                            }
-                        ]
+                        "field": "authenticated",
+                        "op": "==",
+                        "value": false
                     }
                 ]
             },
@@ -1761,7 +1751,7 @@
                             {
                                 "field": "protocol",
                                 "op": "==",
-                                "value": "tcp"
+                                "value": "ws"
                             }
                         ]
                     }
@@ -1772,7 +1762,7 @@
         },
         "threat": {
             "title": "Unencrypted Internal Traffic",
-            "description": "Internal communication uses cleartext protocols (HTTP/TCP), allowing compromised instances to sniff sensitive data."
+            "description": "Internal communication explicitly uses HTTP or unencrypted WebSockets. An attacker with access to the network path may observe or alter this traffic. TCP alone does not establish whether TLS is used."
         },
         "risk": {
             "severity": "Medium",
@@ -2711,7 +2701,7 @@
             "confidence": "high"
         },
         "threat": {
-            "title": "Sign-in Without a Second Factor",
+            "title": "Sign-in Without Multi-Factor Authentication",
             "description": "The sign-in path accepts a single factor, so a phished, reused or guessed password is enough to take over an account.",
             "attack_vector": "An attacker replays credentials obtained from a phishing page or an unrelated breach and reaches the account directly, with no second factor to stop them."
         },

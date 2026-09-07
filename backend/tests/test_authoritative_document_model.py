@@ -69,6 +69,49 @@ def test_docx_fallback_preserves_tables_without_python_docx(monkeypatch):
     assert "Row 2: C1 | Core API | Node.js" in text
 
 
+def test_architecture_yaml_preserves_ids_flows_and_known_issues():
+    payload = b"""
+system: Claims SaaS
+components:
+  - id: web
+    name: Customer Portal
+    type: WebClient
+    trust: public
+  - id: api
+    name: Claims API
+    type: API
+    trust: internal
+  - id: database
+    name: Claims Database
+    type: Database
+    trust: restricted
+flows:
+  - source: web
+    target: api
+    protocol: HTTPS
+    data: access token and claim request
+  - source: api
+    target: database
+    protocol: TLS
+    data: customer PII
+known_issues:
+  - Claims are loaded by caller-provided tenant_id without server-side ownership validation.
+"""
+    text, metadata = document_ingestion._extract_structured_text(payload, ".yml")
+    architecture = ArchitectureParser().parse(
+        "Document: architecture.yml\nType: yml\nRole: source_design\nContent:\n" + text
+    )
+
+    assert metadata["structured_kind"] == "architecture"
+    assert {component.id for component in architecture.components} == {"web", "api", "database"}
+    assert {(flow.source_id, flow.target_id) for flow in architecture.flows} == {
+        ("web", "api"), ("api", "database"),
+    }
+    assert all(not flow.assumed for flow in architecture.flows)
+    assert architecture.metadata["known_issues"][0]["suggested_threat_id"] == \
+        "API-BOLA-TENANT-CONTROL-001"
+
+
 @requires_complex_scenario
 def test_authoritative_tables_replace_heuristic_topology():
     description, _ = _extracted_scenario()
@@ -125,7 +168,11 @@ def test_complex_scenario_findings_are_complete_and_grounded():
         "Denial of Service", "Elevation of Privilege",
     }
     assert not any(threat.id.startswith("KB-K8S-005") for threat in result.threats)
-    assert all(threat.id.startswith("STRIDE-") for threat in potential)
+    # An explicit weakness does not answer independent authentication and token
+    # lifecycle questions on the same component.
+    assert all(threat.id.startswith("STRIDE-") or threat.id in {
+        "CTX-OAUTH-001", "CTX-FHIR-001", "CTX-SESSION-001",
+    } for threat in potential)
     assert not any("public access" in threat.title.lower() and threat.affected_component == "c15"
                    for threat in result.threats)
 

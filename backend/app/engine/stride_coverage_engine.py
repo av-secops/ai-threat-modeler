@@ -8,6 +8,7 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from ..models import Threat
 from . import graph
+from .control_contracts import control_value, presence
 
 
 STRIDE_CATEGORIES = (
@@ -45,9 +46,14 @@ class StrideCoverageEngine:
 
                 linked = existing_index.get((element["id"], category), [])
                 if linked:
+                    state, controls, _ = _control_state(element, category)
+                    confirmed = any(threat.tier == "Confirmed" for threat in linked)
+                    status = "finding" if confirmed else "potential"
                     cells.append(_cell(
-                        element, category, "finding", "One or more findings cover this STRIDE cell.",
-                        [threat.id for threat in linked], [],
+                        element, category, status,
+                        "A confirmed finding is linked; other unspecified controls still require evidence." if confirmed else
+                        "Potential findings are awaiting validation; they do not resolve the evidence gap.",
+                        sorted({threat.id for threat in linked}), controls,
                     ))
                     continue
 
@@ -60,7 +66,7 @@ class StrideCoverageEngine:
                 # threat model without mislabeling an unspecified control as a
                 # confirmed vulnerability.
                 should_surface_unknown = (
-                    control_state == "unknown"
+                    control_state in {"unknown", "partial", "conflicting"}
                     and (element["id"], category) in unknown_candidate_targets
                 )
                 if generate_candidates and (control_state == "absent" or should_surface_unknown):
@@ -79,10 +85,10 @@ class StrideCoverageEngine:
             category_summary[category] = dict(Counter(cell["status"] for cell in category_cells))
 
         assessed = len(cells) - status_counts.get("not_applicable", 0)
-        resolved = status_counts.get("finding", 0) + status_counts.get("control_present", 0)
-        unresolved = status_counts.get("unknown", 0) + status_counts.get("potential", 0)
+        unresolved = sum(bool(cell["unresolved_controls"]) or cell["status"] in {"unknown", "potential"} for cell in cells)
+        resolved = assessed - unresolved
         coverage = {
-            "version": "stride-coverage-3.1",
+            "version": "stride-coverage-3.2",
             "categories": list(STRIDE_CATEGORIES),
             "elements_assessed": len(elements),
             "applicable_cells": assessed,
@@ -227,39 +233,46 @@ def _applicability(element: Dict[str, Any], category: str) -> Tuple[bool, str]:
     return False, "The category is not applicable to this element type."
 
 
-def _control_state(element: Dict[str, Any], category: str) -> Tuple[str, List[str], str]:
+def _control_details(element: Dict[str, Any], category: str) -> Dict[str, str]:
     props = element["properties"]
     kind = element["kind"]
-    controls = _expected_controls(kind, category)
-    values = []
+    controls = _expected_controls(kind, category, element)
+    states = {}
     for control in controls:
         if control == "transport_encryption":
             protocol = str(props.get("protocol") or "").lower()
-            values.append(True if protocol in {"https", "tls", "mtls", "wss", "grpcs"} else False if protocol in {"http", "ws"} else None)
+            states[control] = "present" if protocol in {"https", "tls", "mtls", "wss", "grpcs"} else "absent" if protocol in {"http", "ws"} else "unknown"
         elif control == "authorization":
-            values.append(True if props.get("rbac_enabled") or props.get("abac_enabled") else False if props.get("authorization") == "none" else None)
-        elif control == "resilience":
-            values.append(True if any(props.get(key) for key in ("multi_region", "replication", "backup_enabled", "autoscaling")) else None)
-        elif control == "integrity_validation":
-            values.append(True if any(props.get(key) for key in ("input_validation", "webhook_signature_validation", "container_image_provenance")) else False if props.get("input_validation") is False else None)
+            alternatives = [control_value(props, key) for key in ("authorization", "rbac_enabled", "abac_enabled")]
+            states[control] = "conflicting" if "conflicting" in alternatives else "present" if "present" in alternatives else "absent" if control_value(props, "authorization") == "absent" else "unknown"
         else:
-            values.append(props.get(control))
-
-    if any(value is False or value == "none" for value in values):
-        return "absent", controls, f"A relevant control is explicitly absent: {', '.join(controls)}."
-    if any(value is True or (isinstance(value, str) and value not in {"", "none", "unknown"}) for value in values):
-        return "present", controls, f"At least one relevant control is stated: {', '.join(controls)}."
-    return "unknown", controls, f"The architecture does not specify: {', '.join(controls)}."
+            states[control] = control_value(props, control)
+    return states
 
 
-def _expected_controls(kind: str, category: str) -> List[str]:
+def _control_state(element: Dict[str, Any], category: str) -> Tuple[str, List[str], str]:
+    states = _control_details(element, category)
+    absent = [key for key, value in states.items() if value == "absent"]
+    unresolved = [key for key, value in states.items() if value in {"unknown", "conflicting"}]
+    if "conflicting" in states.values():
+        return "conflicting", unresolved, "Conflicting control claims require source reconciliation."
+    if absent:
+        return "absent", absent, f"Explicitly absent controls: {', '.join(absent)}."
+    if not unresolved:
+        return "present", list(states), "All controls in this assessment profile are stated; effectiveness is not independently verified."
+    support = category == "Denial of Service" and presence(element["properties"].get("waf_enabled")) is True
+    partial = "present" in states.values() or support
+    return "partial" if partial else "unknown", unresolved, f"Controls requiring evidence: {', '.join(unresolved)}."
+
+
+def _expected_controls(kind: str, category: str, element: Optional[Dict[str, Any]] = None) -> List[str]:
     mapping = {
-        "Spoofing": ["auth_type", "mfa_enabled", "mtls_enabled"],
-        "Tampering": ["integrity_validation", "input_validation"],
-        "Repudiation": ["audit_logging", "logging_enabled"],
-        "Information Disclosure": ["encryption_at_rest", "encryption_in_transit", "transport_encryption", "dlp_enabled"],
-        "Denial of Service": ["rate_limiting", "waf_enabled", "resilience"],
-        "Elevation of Privilege": ["authorization", "rbac_enabled", "abac_enabled"],
+        "Spoofing": ["auth_type"],
+        "Tampering": ["input_validation"],
+        "Repudiation": ["audit_logging", "log_integrity"],
+        "Information Disclosure": ["encryption_at_rest", "encryption_in_transit"],
+        "Denial of Service": ["rate_limiting", "request_size_limit"],
+        "Elevation of Privilege": ["authorization"],
     }
     controls = mapping[category]
     if kind == "flow":
@@ -273,6 +286,13 @@ def _expected_controls(kind: str, category: str) -> List[str]:
         }[category]
     if kind == "actor":
         return {"Spoofing": ["auth_type", "mfa_enabled"], "Repudiation": ["audit_logging"], "Elevation of Privilege": ["authorization"]}.get(category, controls)
+    props = (element or {}).get("properties", {})
+    if category == "Spoofing" and (element or {}).get("type") == "Identity Provider":
+        controls = [*controls, "mfa_enabled", "token_revocation"]
+    if category == "Denial of Service" and props.get("has_graphql") is True:
+        controls = [*controls, "query_depth_limiting"]
+    if category == "Elevation of Privilege" and props.get("multi_tenant") is True:
+        controls = [*controls, "tenant_isolation"]
     return controls
 
 
@@ -338,7 +358,7 @@ def _select_unknown_candidate_targets(
             if not applicable or existing_index.get((element["id"], category)):
                 continue
             state, _, _ = _control_state(element, category)
-            if state != "unknown" or not _risk_relevant(element, category):
+            if state not in {"unknown", "partial", "conflicting"} or not _risk_relevant(element, category):
                 continue
             ranked.append((_unknown_candidate_priority(element, category), element["id"], category))
     # Sorted by score, then by name so the same architecture always produces the
@@ -464,11 +484,14 @@ def _candidate_threat(element: Dict[str, Any], category: str, state: str, contro
 
 
 def _cell(element: Dict[str, Any], category: str, status: str, rationale: str, finding_ids: List[str], controls: List[str]) -> Dict[str, Any]:
+    details = _control_details(element, category) if status != "not_applicable" else {}
     return {
         "element_id": element["id"], "element_name": element["name"],
         "element_kind": element["kind"], "element_type": element["type"],
         "category": category, "status": status, "rationale": rationale,
         "finding_ids": finding_ids, "controls": controls,
+        "control_assessment": {"state": _control_state(element, category)[0], "controls": details} if details else {},
+        "unresolved_controls": [name for name, state in details.items() if state in {"unknown", "conflicting"}],
     }
 
 

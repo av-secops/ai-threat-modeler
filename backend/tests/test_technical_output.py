@@ -16,10 +16,9 @@ resource "aws_db_instance" "primary" {
         "components", "assets", "data_flows", "trust_boundaries",
         "public_entry_points", "identities", "cloud_resources", "boundary_crossings",
     }
-    # v3 caps exposure and required privilege together, drops evidence confidence
-    # from likelihood and scores control state instead of exploit complexity, so
-    # reports from either side of that change are not comparable by severity alone.
-    assert result.risk_methodology["version"] == "technical-v3"
+    # v4 deduplicates root risks before scoring and reports uncertainty separately.
+    assert result.risk_methodology["version"] == "technical-v4"
+    assert result.risk_methodology["score_breakdown"]["unique_risk_groups"] > 0
     assert result.finding_groups["iac"]
 
     finding = result.finding_groups["iac"][0]
@@ -28,9 +27,10 @@ resource "aws_db_instance" "primary" {
     assert finding.risk_factors["evidence_confidence"] == "High"
     assert finding.preconditions
 
-    path = result.attack_chains["paths"][0]
-    assert path["related_threat_id"] == finding.id
-    assert path["evidence"]
+    # An isolated resource is an exploit scenario, not a graph attack path.
+    assert result.attack_chains["paths"] == []
+    assert finding.attack_path is None
+    assert finding.explanation["attack_path_reason"] in {"no_reachable_entry", "no_explicit_hop"}
 
     assert "## 5. Technical Findings" in result.report_markdown
     assert "## 6. Evidence-Backed Attack Paths" in result.report_markdown

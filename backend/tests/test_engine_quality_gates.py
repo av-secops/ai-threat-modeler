@@ -164,6 +164,24 @@ def test_local_challenger_returns_questions_not_findings():
     assert result["review_candidates"][0]["status"] == "information_required"
 
 
+def test_local_challenger_uses_the_score_for_each_element_scope():
+    architecture = SystemArchitecture(
+        components=[Component(id="api", name="API", type="API", trust_level="public")],
+        flows=[], metadata={"architecture_text": "A public API receives requests."},
+    )
+    retrieved = [{
+        "id": "API-CANDIDATE", "title": "API authentication weakness",
+        "stride_category": "Spoofing", "retrieval_score": 0.9,
+        "retrieved_for": ["api:Spoofing"],
+        "retrieval_scores_by_scope": {"api:Spoofing": 0.31},
+    }]
+
+    result = LocalChallenger().challenge(architecture, [], retrieved)
+
+    assert result["review_candidates"] == []
+    assert result["review_candidate_count"] == 0
+
+
 def test_structured_local_slm_rejects_hallucinated_scope_and_evidence():
     architecture = SystemArchitecture(
         components=[Component(id="api", name="API", type="API")], flows=[],
@@ -231,7 +249,7 @@ def test_simple_node_keycloak_ec2_s3_architecture_returns_stride_risks():
         "Denial of Service", "Elevation of Privilege",
     }
     assert all(threat.tier == "Potential" for threat in result.threats)
-    assert all((threat.explanation or {}).get("control_state") == "unknown" for threat in result.threats)
+    assert all((threat.explanation or {}).get("control_state") in {"unknown", "partial"} for threat in result.threats)
 
 
 def test_omission_challenger_accepts_concrete_alias_representations():

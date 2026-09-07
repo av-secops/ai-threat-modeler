@@ -1,0 +1,317 @@
+[
+  {
+    "id": "ENT-AI-GROUNDING",
+    "title": "Unsupported model output drives sensitive decisions",
+    "description": "An application may act on fabricated or incorrectly grounded model output when it treats generated statements as verified facts.",
+    "resource_type": [
+      "ML Service"
+    ],
+    "stride_category": "Tampering",
+    "severity": "Medium",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-20"
+    ],
+    "detection": {
+      "auto_detectable": false,
+      "logic": {},
+      "evidence_requirement": "candidate_only"
+    },
+    "mitigation": "Require authoritative sources and deterministic validation for consequential decisions; record uncertainty and route unresolved cases to a qualified reviewer.",
+    "verification": "Compare generated claims with cited authoritative records and test invalid or absent citations before any consequential action.",
+    "preconditions": [
+      "Verify the described technology and operation are present; obtain code, configuration or a controlled test before confirming this hypothesis."
+    ],
+    "framework_mappings": [
+      {
+        "framework": "owasp_llm",
+        "version": "2026",
+        "id": "LLM07"
+      }
+    ],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/20.html"
+    ],
+    "tags": [
+      "ai",
+      "review-hypothesis"
+    ],
+    "version": "1.0.0",
+    "review_status": "automated_contract_review",
+    "source": "Aegis enterprise review hypotheses",
+    "last_reviewed": "2026-09-05"
+  },
+  {
+    "id": "ENT-AI-APPROVAL-CONTEXT",
+    "title": "Human approval can conceal the actual agent action",
+    "description": "An agent can present a persuasive but incomplete summary while the proposed tool arguments authorize a different target, amount or side effect.",
+    "resource_type": [
+      "ML Service"
+    ],
+    "stride_category": "Tampering",
+    "severity": "Medium",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-451"
+    ],
+    "detection": {
+      "auto_detectable": false,
+      "logic": {},
+      "evidence_requirement": "candidate_only"
+    },
+    "mitigation": "Bind approval to immutable action parameters and show the exact target, authorization scope and side effects outside model-generated text.",
+    "verification": "Alter a proposed tool call after approval; execution must reject the changed parameters.",
+    "preconditions": [
+      "Verify the described technology and operation are present; obtain code, configuration or a controlled test before confirming this hypothesis."
+    ],
+    "framework_mappings": [
+      {
+        "framework": "owasp_agentic",
+        "version": "2026",
+        "id": "ASI09"
+      }
+    ],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/451.html"
+    ],
+    "tags": [
+      "ai",
+      "review-hypothesis"
+    ],
+    "version": "1.0.0",
+    "review_status": "automated_contract_review",
+    "source": "Aegis enterprise review hypotheses",
+    "last_reviewed": "2026-09-05"
+  },
+  {
+    "id": "ENT-AI-GOAL-CONTROL",
+    "title": "Autonomous agents can act beyond the assigned objective",
+    "description": "An agent with persistent execution and broad tools may continue unrequested actions without a deterministic task boundary or independent stop control.",
+    "resource_type": [
+      "ML Service"
+    ],
+    "stride_category": "Elevation of Privilege",
+    "severity": "Medium",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-863"
+    ],
+    "detection": {
+      "auto_detectable": false,
+      "logic": {},
+      "evidence_requirement": "candidate_only"
+    },
+    "mitigation": "Enforce task-scoped capabilities, explicit completion conditions and revocable execution outside the model; record actions and allow immediate cancellation.",
+    "verification": "Cancel a test task and attempt a new unassigned action; neither the agent nor descendants may keep acting.",
+    "preconditions": [
+      "Verify the described technology and operation are present; obtain code, configuration or a controlled test before confirming this hypothesis."
+    ],
+    "framework_mappings": [
+      {
+        "framework": "owasp_agentic",
+        "version": "2026",
+        "id": "ASI10"
+      }
+    ],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/863.html"
+    ],
+    "tags": [
+      "ai",
+      "review-hypothesis"
+    ],
+    "version": "1.0.0",
+    "review_status": "automated_contract_review",
+    "source": "Aegis enterprise review hypotheses",
+    "last_reviewed": "2026-09-05"
+  },
+  {
+    "id": "ENT-NATIVE-BOUNDS",
+    "title": "Native memory access may exceed allocated bounds",
+    "description": "Native parsers and unsafe FFI code may read or write outside an allocated buffer when processing attacker-controlled sizes. Architecture presence alone does not establish a memory defect.",
+    "resource_type": [
+      "Native Service"
+    ],
+    "stride_category": "Tampering",
+    "severity": "Medium",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-787",
+      "CWE-125",
+      "CWE-120",
+      "CWE-121",
+      "CWE-122"
+    ],
+    "detection": {
+      "auto_detectable": false,
+      "logic": {},
+      "evidence_requirement": "candidate_only"
+    },
+    "mitigation": "Prefer memory-safe implementations; review unsafe boundaries, validate lengths before allocation and copying, and enable compiler hardening.",
+    "verification": "Run sanitizers, fuzzers and boundary-value tests on the relevant parser; require a reproducible source-level failure before confirming a vulnerability.",
+    "preconditions": [
+      "Verify the described technology and operation are present; obtain code, configuration or a controlled test before confirming this hypothesis."
+    ],
+    "framework_mappings": [],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/787.html",
+      "https://cwe.mitre.org/data/definitions/125.html",
+      "https://cwe.mitre.org/data/definitions/120.html",
+      "https://cwe.mitre.org/data/definitions/121.html",
+      "https://cwe.mitre.org/data/definitions/122.html"
+    ],
+    "tags": [
+      "native",
+      "review-hypothesis"
+    ],
+    "version": "1.0.0",
+    "review_status": "automated_contract_review",
+    "source": "Aegis enterprise review hypotheses",
+    "last_reviewed": "2026-09-05"
+  },
+  {
+    "id": "ENT-NATIVE-LIFETIME",
+    "title": "Native object lifetime errors may permit use after free",
+    "description": "Unsafe concurrent or callback-driven native code can retain references after an object's lifetime ends. A code or runtime trace is required to establish this weakness.",
+    "resource_type": [
+      "Native Service"
+    ],
+    "stride_category": "Elevation of Privilege",
+    "severity": "Medium",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-416"
+    ],
+    "detection": {
+      "auto_detectable": false,
+      "logic": {},
+      "evidence_requirement": "candidate_only"
+    },
+    "mitigation": "Use ownership-safe data structures and synchronization; minimize unsafe FFI lifetimes and run address/thread sanitizers.",
+    "verification": "Exercise cancellation, concurrent callbacks and error cleanup paths with sanitizers and confirm ownership remains valid.",
+    "preconditions": [
+      "Verify the described technology and operation are present; obtain code, configuration or a controlled test before confirming this hypothesis."
+    ],
+    "framework_mappings": [],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/416.html"
+    ],
+    "tags": [
+      "native",
+      "review-hypothesis"
+    ],
+    "version": "1.0.0",
+    "review_status": "automated_contract_review",
+    "source": "Aegis enterprise review hypotheses",
+    "last_reviewed": "2026-09-05"
+  },
+  {
+    "id": "ENT-NATIVE-NULL",
+    "title": "Unchecked native failure results may terminate a service",
+    "description": "Failed parsing or allocation may lead to a null dereference in a native service. This is a review hypothesis until a relevant source path or failure is shown.",
+    "resource_type": [
+      "Native Service"
+    ],
+    "stride_category": "Denial of Service",
+    "severity": "Medium",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-476"
+    ],
+    "detection": {
+      "auto_detectable": false,
+      "logic": {},
+      "evidence_requirement": "candidate_only"
+    },
+    "mitigation": "Check fallible API results, use bounded allocations and propagate errors safely without dereferencing absent objects.",
+    "verification": "Fault-inject allocation and parse failures in tests; each path must return a bounded error rather than crash.",
+    "preconditions": [
+      "Verify the described technology and operation are present; obtain code, configuration or a controlled test before confirming this hypothesis."
+    ],
+    "framework_mappings": [],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/476.html"
+    ],
+    "tags": [
+      "native",
+      "review-hypothesis"
+    ],
+    "version": "1.0.0",
+    "review_status": "automated_contract_review",
+    "source": "Aegis enterprise review hypotheses",
+    "last_reviewed": "2026-09-05"
+  },
+  {
+    "id": "ENT-MOBILE-DEEPLINK",
+    "title": "Mobile deep links may cross authorization boundaries",
+    "description": "A mobile deep link or exported component may expose a sensitive operation without independently verifying the caller and authenticated user.",
+    "resource_type": [
+      "Mobile App"
+    ],
+    "stride_category": "Elevation of Privilege",
+    "severity": "Medium",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-939"
+    ],
+    "detection": {
+      "auto_detectable": false,
+      "logic": {},
+      "evidence_requirement": "candidate_only"
+    },
+    "mitigation": "Allowlist app-link destinations, validate parameters and enforce authorization inside the invoked operation; do not rely on navigation state.",
+    "verification": "Invoke exported routes from an untrusted test app and while logged out; sensitive actions must be denied.",
+    "preconditions": [
+      "Verify the described technology and operation are present; obtain code, configuration or a controlled test before confirming this hypothesis."
+    ],
+    "framework_mappings": [],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/939.html"
+    ],
+    "tags": [
+      "mobile",
+      "review-hypothesis"
+    ],
+    "version": "1.0.0",
+    "review_status": "automated_contract_review",
+    "source": "Aegis enterprise review hypotheses",
+    "last_reviewed": "2026-09-05"
+  },
+  {
+    "id": "ENT-WEB-CSRF-REVIEW",
+    "title": "Cookie-authenticated state changes require CSRF protection review",
+    "description": "Where browsers automatically attach authentication cookies, a cross-origin request may trigger a state change unless the application validates request origin or an anti-CSRF token. Cookie authentication must first be established.",
+    "resource_type": [
+      "API",
+      "WebClient"
+    ],
+    "stride_category": "Spoofing",
+    "severity": "Medium",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-352"
+    ],
+    "detection": {
+      "auto_detectable": false,
+      "logic": {},
+      "evidence_requirement": "candidate_only"
+    },
+    "mitigation": "Enforce anti-CSRF tokens or a rigorously validated origin policy for state changes; use secure cookie attributes as defense in depth.",
+    "verification": "Test a cross-site state-changing request with an authenticated test browser; verify rejection without the required origin or token.",
+    "preconditions": [
+      "Verify the described technology and operation are present; obtain code, configuration or a controlled test before confirming this hypothesis."
+    ],
+    "framework_mappings": [],
+    "references": [
+      "https://cwe.mitre.org/data/definitions/352.html"
+    ],
+    "tags": [
+      "web",
+      "review-hypothesis"
+    ],
+    "version": "1.0.0",
+    "review_status": "automated_contract_review",
+    "source": "Aegis enterprise review hypotheses",
+    "last_reviewed": "2026-09-05"
+  }
+]

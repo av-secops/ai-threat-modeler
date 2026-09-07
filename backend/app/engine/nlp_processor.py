@@ -124,8 +124,8 @@ PROTOCOL_INDICATORS = {
 }
 
 SERVICE_NAME_PATTERNS = [
-    r"(?:^|\n)\s*(?:\d+\.|-|\*)\s+([A-Z][A-Za-z0-9/&\-\s]+?(?:Service|API|Gateway|Worker|Job|Handler|Manager|Controller|Processor|Engine|Store|Database|Cache|Agent|Pipeline))\s*(?:\(([^)]+)\))?",
-    r"(?:^|\n)\s*([A-Z][A-Za-z0-9/&\-\s]+?(?:Service|API|Gateway|Worker|Job|Handler|Manager|Controller|Processor|Engine|Store|Database|Cache|Agent|Pipeline))\s*:\s*([^\n]+)",
+    r"(?:^|\n)[ \t]*(?:\d+\.|-|\*)[ \t]+([A-Z][A-Za-z0-9/&\- \t]+?(?:Service|API|Gateway|Worker|Job|Handler|Manager|Controller|Processor|Engine|Store|Database|Cache|Agent|Pipeline))[ \t]*(?:\(([^)\r\n]+)\))?",
+    r"(?:^|\n)[ \t]*([A-Z][A-Za-z0-9/&\- \t]+?(?:Service|API|Gateway|Worker|Job|Handler|Manager|Controller|Processor|Engine|Store|Database|Cache|Agent|Pipeline))[ \t]*:[ \t]*([^\r\n]+)",
 ]
 
 

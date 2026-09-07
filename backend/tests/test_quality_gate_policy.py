@@ -113,12 +113,14 @@ def test_an_omitted_component_asks_for_review_rather_than_blocking():
     }
 
 
-def test_unknown_control_states_are_reported_as_coverage_not_as_a_defect():
+def test_low_control_determination_requires_conditional_review():
     coverage = {"unknown_cells": 52, "applicable_cells": 64}
     result = gate(VALID, [_threat()], coverage, architecture=_architecture())
 
-    assert result["status"] == "ready"
-    assert result["completeness_warnings"] == []
+    assert result["status"] == "review"
+    assert [item["check"] for item in result["completeness_warnings"]] == [
+        "low_determined_control_coverage",
+    ]
     assert result["unknown_stride_cells"] == 52
     assert result["determined_control_ratio"] == 0.188
 

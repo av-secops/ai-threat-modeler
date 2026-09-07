@@ -28,13 +28,14 @@ const LENS_THEME = {
     low: { fill: [220, 252, 231], ink: [22, 101, 52] },
 };
 
-export const generateReport = async (data, projectName) => {
+export const generateReport = async (data, projectName, reviewStates = {}) => {
     try {
         if (!data) {
             alert('No data to export.');
             return;
         }
         const qualityGate = data.engine_status?.quality_gate || {};
+        const publicationLabel = qualityGate.publication_status === 'ready' ? 'Publication ready' : 'Technical review';
         if (qualityGate.status === 'blocked' || qualityGate.publication_status === 'blocked') {
             const reasons = (qualityGate.integrity_violations || [])
                 .map((item) => item.detail)
@@ -60,11 +61,18 @@ export const generateReport = async (data, projectName) => {
             if (sevDelta !== 0) return sevDelta;
             return (b.risk_score || 0) - (a.risk_score || 0);
         });
-        const confirmed = allThreats.filter((t) => t.tier === 'Confirmed');
-        const potential = allThreats.filter((t) => t.tier !== 'Confirmed');
+        const excluded = allThreats.filter((t) => reviewStates[t.id] === 'false_positive');
+        const included = allThreats.filter((t) => reviewStates[t.id] !== 'false_positive');
+        const confirmed = included.filter((t) => String(t.tier).toLowerCase() === 'confirmed');
+        const potential = included.filter((t) => String(t.tier).toLowerCase() !== 'confirmed');
         const score = data.score || 0;
         const aiLens = data.ai_security_lens || { overview: '', items: [] };
-        const priorityActions = (data.priority_actions || []).slice(0, 3);
+        const priorityActions = Object.values(reviewStates).some((state) => state !== 'open')
+            ? included.filter((t) => !['mitigated', 'accepted'].includes(reviewStates[t.id]) && t.finding_type !== 'validation_question').slice(0, 3).map((t) => ({
+                title: t.title, priority: t.severity, why_now: `${t.tier} finding; ${t.severity} severity.`,
+                action: t.mitigation, focus_area: t.affected_components,
+            }))
+            : (data.priority_actions || []).slice(0, 3);
 
         const checkPageBreak = (requiredHeight = 24) => {
             if (y + requiredHeight > contentBottomLimit) {
@@ -99,13 +107,13 @@ export const generateReport = async (data, projectName) => {
             doc.setDrawColor(...COLORS.line);
             doc.setFillColor(...COLORS.brand);
             doc.roundedRect(left, y - 1.5, 1.8, 8, 0.8, 0.8, 'F');
-            doc.line(left + 3.8, y + 6.6, pageWidth - right, y + 6.6);
-            writeText(title, { size: 14, style: 'bold', x: left + 5, leading: 5.5 });
+            writeText(title, { size: 14, style: 'bold', x: left + 5, leading: 6.5 });
             if (subtitle) {
                 writeText(subtitle, { size: 9, color: COLORS.muted, x: left + 5, leading: 4.3 });
-            } else {
-                y += 1;
             }
+            y += 1;
+            doc.line(left + 3.8, y, pageWidth - right, y);
+            y += 4;
         };
 
         const drawCard = (x, w, h, fill = COLORS.panel) => {
@@ -115,12 +123,12 @@ export const generateReport = async (data, projectName) => {
         };
 
         const drawMetricCards = () => {
-            const critical = allThreats.filter((t) => t.severity === 'Critical').length;
-            const high = allThreats.filter((t) => t.severity === 'High').length;
+            const critical = confirmed.filter((t) => t.severity === 'Critical').length;
+            const high = confirmed.filter((t) => t.severity === 'High').length;
 
             const cards = [
-                { label: 'Critical findings', value: critical, color: COLORS.danger },
-                { label: 'High findings', value: high, color: [234, 88, 12] },
+                { label: 'Confirmed critical', value: critical, color: COLORS.danger },
+                { label: 'Confirmed high', value: high, color: [234, 88, 12] },
                 { label: 'Confirmed risks', value: confirmed.length, color: COLORS.brand },
                 { label: 'Potential risks', value: potential.length, color: COLORS.warning },
             ];
@@ -187,7 +195,7 @@ export const generateReport = async (data, projectName) => {
 
             const generatedAt = new Date().toLocaleString();
             doc.setFontSize(8);
-            doc.text(`Generated ${generatedAt} | Publication ready`, left, 36);
+            doc.text(`Generated ${generatedAt} | ${publicationLabel}`, left, 36);
 
             const scoreColor = score >= 70 ? COLORS.success : score >= 40 ? COLORS.warning : COLORS.danger;
             doc.setFillColor(255, 255, 255);
@@ -321,7 +329,7 @@ export const generateReport = async (data, projectName) => {
                 mermaid.initialize({
                     startOnLoad: false,
                     theme: 'default',
-                    securityLevel: 'loose',
+                    securityLevel: 'strict',
                     fontFamily: 'Arial, sans-serif',
                     flowchart: { useMaxWidth: false, htmlLabels: false, curve: 'basis' },
                 });
@@ -418,7 +426,7 @@ export const generateReport = async (data, projectName) => {
         };
 
         const drawThreatSection = (title, threats, toneColor) => {
-            drawSectionTitle(title, `${threats.length} findings in this section.`);
+            drawSectionTitle(title, `${threats.length} ${threats.length === 1 ? 'finding' : 'findings'} in this section.`);
             if (!threats.length) {
                 writeText('No findings in this section.', { size: 9, color: COLORS.muted });
                 return;
@@ -435,13 +443,16 @@ export const generateReport = async (data, projectName) => {
                 if (threat.mitre_attack?.length) refs.push(`MITRE ATT&CK ${threat.mitre_attack.join(', ')}`);
                 if (threat.mitre_atlas?.length) refs.push(`MITRE ATLAS ${threat.mitre_atlas.join(', ')}`);
                 if (threat.owasp_top_10?.length) refs.push(`OWASP ${threat.owasp_top_10.map((o) => String(o).split('-')[0]).join(', ')}`);
+                for (const mapping of threat.explanation?.framework_mappings || []) {
+                    refs.push(`${mapping.framework_name} ${mapping.version}: ${mapping.id}`);
+                }
                 doc.setFontSize(7);
-                const refLines = refs.length ? doc.splitTextToSize(refs.join(' | '), contentWidth - 5.2).slice(0, 1) : [];
+                const refLines = refs.length ? doc.splitTextToSize(refs.join(' | '), contentWidth - 5.2) : [];
                 doc.setFontSize(7.3);
                 const mitigationLines = doc.splitTextToSize(`Mitigation: ${threat.mitigation || 'N/A'}`, contentWidth - 7).slice(0, 3);
                 const descTop = 14.2;
                 const refsTop = descTop + Math.max(descLines.length, 1) * 3.6 + 1.2;
-                const mitigationTop = refsTop + (refLines.length ? 3.4 : 0) + 1.3;
+                const mitigationTop = refsTop + refLines.length * 3.4 + 1.3;
                 const mitigationHeight = Math.max(8, mitigationLines.length * 3.3 + 3.2);
                 const boxHeight = mitigationTop + mitigationHeight + 1.5;
                 checkPageBreak(boxHeight + 6);
@@ -463,6 +474,7 @@ export const generateReport = async (data, projectName) => {
                 const meta = [
                     threat.category || 'Unknown category',
                     `Confidence: ${threat.confidence || 'Medium'}`,
+                    ...(reviewStates[threat.id] && reviewStates[threat.id] !== 'open' ? [`Review: ${reviewStates[threat.id].replaceAll('_', ' ')}`] : []),
                     `STRIDE: ${(threat.affected_stride_categories?.length ? threat.affected_stride_categories : [threat.stride_category || threat.category]).join(', ')}`,
                 ].filter(Boolean);
                 doc.text(doc.splitTextToSize(meta.join(' | '), contentWidth - 5.2).slice(0, 1), left + 2.6, y + 10.1);
@@ -495,6 +507,7 @@ export const generateReport = async (data, projectName) => {
             const requests = evidence.requests || [];
             if (!requests.length) return;
 
+            checkPageBreak(65);
             drawSectionTitle('Evidence Requests', evidence.summary || 'Questions that would resolve the unassessed parts of this model.');
 
             requests.forEach((request) => {
@@ -537,16 +550,24 @@ export const generateReport = async (data, projectName) => {
         };
 
         drawCover();
-        drawSectionTitle('Executive Summary', 'A concise leadership view of current risk exposure and analysis confidence.');
-        writeText(data.summary || 'No summary available.', { size: 9.5, color: COLORS.ink });
+        drawSectionTitle('Assessment Summary');
+        writeText(excluded.length
+            ? `${confirmed.length} confirmed risks and ${potential.length} potential risks after reviewer exclusions. ${excluded.length} ${excluded.length === 1 ? 'finding marked false positive is' : 'findings marked false positive are'} retained in the Reviewer Exclusions section.`
+            : data.summary || 'No summary available.', { size: 9.5, color: COLORS.ink });
+        if (excluded.length) writeText('The security score is the original analysis score; reviewer decisions do not recalculate it.', { size: 8, color: COLORS.muted });
+        if (qualityGate.completeness_warnings?.length) {
+            writeText('Review required: ' + qualityGate.completeness_warnings.map((item) => item.detail).join(' '), { size: 8, color: COLORS.muted });
+        }
+        writeText('Confirmed means supported by submitted evidence, not independently verified exploitation.', { size: 8, color: COLORS.muted });
         drawMetricCards();
 
         drawTopActions();
-        drawAILens();
+        if (aiLens.items?.length) drawAILens();
         await drawArchitectureSnapshot();
 
         drawThreatSection('Confirmed Risks', confirmed, COLORS.brand);
         drawThreatSection('Potential Risks', potential, COLORS.warning);
+        if (excluded.length) drawThreatSection('Reviewer Exclusions', excluded, COLORS.muted);
         drawEvidenceRequests();
 
         drawFooterOnAllPages();

@@ -2,6 +2,7 @@
 
 from app.engine import source_index
 from app.engine.analyzer import ThreatAnalyzer
+from app.engine.parser import ArchitectureParser
 
 
 def _assembled(*sections: str, context: str = "") -> str:
@@ -113,6 +114,54 @@ def test_document_headers_are_never_reported_as_design_statements():
     assert header is not None
     assert header.locator == source_index.HEADER_LOCATOR
     assert header.line is None
+
+
+def test_known_issues_stop_at_the_next_uploaded_document_and_iac_is_not_prose():
+    text = _assembled(
+        _document(
+            "docker-compose.yml", "yml",
+            """# Health Check configuration
+services:
+  aitm:
+    build: .
+    ports: [\"8000:8000\"]
+    environment:
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*}
+
+[Structured paths]
+$.services.aitm.ports[0] = '8000:8000'""",
+        ),
+        context="""A React client calls a FastAPI service.
+KNOWN ISSUES:
+- CORS allows wildcard origins.
+- Internal service calls have no rate limiting.""",
+    )
+
+    architecture = ArchitectureParser().parse(text)
+    issues = architecture.metadata["known_issues"]
+    component_ids = {component.id for component in architecture.components}
+    iac_rules = {finding["rule_id"] for finding in architecture.metadata["iac_findings"]}
+
+    assert len(issues) == 2
+    assert not any(issue["description"].startswith(("Document:", "Type:", "Role:")) for issue in issues)
+    assert "aitm" in component_ids
+    assert "health_service" not in component_ids
+    assert "IAC-COMPOSE-CORS-WILDCARD" in iac_rules
+
+
+def test_service_extraction_never_builds_a_component_name_across_bullets():
+    architecture = ArchitectureParser().parse("""
+- React SPA frontend hosted on CloudFront CDN
+- API Gateway with OAuth2 via Auth0
+- Python FastAPI microservices:
+  1. Auth Service: Handles user management
+  2. Billing Service: Integrates with Stripe
+""")
+
+    names = {component.name for component in architecture.components}
+    assert "Auth Service" in names
+    assert "Billing Service" in names
+    assert not any("React SPA frontend hosted" in name and "Service" in name for name in names)
 
 
 def test_evidence_quotes_the_design_rather_than_a_filename():

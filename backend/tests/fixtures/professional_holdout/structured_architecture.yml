@@ -1,0 +1,33 @@
+system: Claims Holdout
+components:
+  - id: portal
+    name: Customer Portal
+    type: WebClient
+    trust: public
+  - id: gateway
+    name: API Gateway
+    type: API Gateway
+    trust: edge
+  - id: claims
+    name: Claims Service
+    type: API
+    trust: internal
+  - id: database
+    name: Claims Database
+    type: Database
+    trust: restricted
+flows:
+  - source: portal
+    target: gateway
+    protocol: HTTPS
+    data: access token and claim
+  - source: gateway
+    target: claims
+    protocol: mTLS
+    data: authenticated claim
+  - source: claims
+    target: database
+    protocol: TLS
+    data: customer PII
+known_issues:
+  - Claims Service trusts caller-provided tenant_id and does not verify record ownership.

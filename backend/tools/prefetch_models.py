@@ -19,23 +19,29 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.engine import model_policy  # noqa: E402
-from app.engine.embedding_service import EmbeddingService  # noqa: E402
 from app.engine.nlp_processor import NER_MODEL  # noqa: E402
+from app.engine.retrieval_config import configured_embedding_model, configured_reranker_model  # noqa: E402
 
 # Roles the product describes. Optional roles stay unconfigured on most
 # installs; the report says so rather than implying they ran.
 ROLES = [
     {
         "role": "embeddings",
-        "model": EmbeddingService.DEFAULT_MODEL,
+        "model": configured_embedding_model(),
         "kind": "sentence-transformer",
         "required": True,
     },
     {
         "role": "reranker",
-        "model": os.getenv("AEGIS_THREAT_RERANKER_MODEL", "").strip(),
+        "model": configured_reranker_model() or "",
         "kind": "cross-encoder",
         "required": False,
+    },
+    {
+        "role": "stride_classifier_embeddings",
+        "model": os.getenv("AEGIS_THREAT_CLASSIFIER_EMBEDDING_MODEL", "all-MiniLM-L6-v2").strip(),
+        "kind": "sentence-transformer",
+        "required": True,
     },
     {
         "role": "named_entity_recognition",
@@ -126,11 +132,19 @@ def main() -> int:
     missing_required = [item for item in results if item["required"] and item["status"] != "available"]
 
     if args.write_lock:
-        models = {
-            item["model"]: {"role": item["role"], "revision": item["revision"], "required": item["required"]}
+        try:
+            existing = json.loads(model_policy.LOCK_FILE.read_text(encoding="utf-8")).get("models", {})
+        except (OSError, ValueError):
+            existing = {}
+        models = dict(existing)
+        models.update({
+            item["model"]: {
+                "role": item["role"], "revision": item["revision"],
+                "source": item["model"], "required": item["required"],
+            }
             for item in results
             if item["status"] == "available" and item["revision"]
-        }
+        })
         payload = {
             "comment": (
                 "Revisions this deployment is pinned to. Loads are offline and refuse a "
@@ -145,7 +159,7 @@ def main() -> int:
     if missing_required:
         roles = ", ".join(item["role"] for item in missing_required)
         print(f"\nRequired model(s) unavailable: {roles}")
-        print("Analysis will still run on the TF-IDF fallback, with reduced retrieval quality.")
+        print("Analysis will still run on BM25 plus local hashing, with reduced semantic quality.")
         return 1
     return 0
 

@@ -1,0 +1,338 @@
+NEXORA TELECOM BSS - PRODUCTION RELEASE 26.09
+Document revision: architecture-1
+
+This is a fictional telecom business-support-system assessment scenario. It is
+inspired by the product category of platforms such as Amdocs Optima, not by any
+claim about Amdocs' actual architecture, controls or vulnerabilities.
+
+1. BUSINESS CONTEXT
+
+Nexora serves 25 telecom operators and MVNOs across multiple countries. It manages
+approximately 12 million subscriber accounts and processes approximately 400
+million usage records daily. These are scenario assumptions, not vendor claims.
+The platform supports prepaid and postpaid mobile, broadband, enterprise plans,
+bundles, roaming settlement, partner sales and customer self-service.
+
+Each operator is a tenant. A tenant owns subscriber identities, tariffs, usage,
+wallets, invoices, service orders, support cases and partner settlement records.
+Enterprise customers can contain multiple billing accounts. Operator support
+agents must not access another operator's records. Platform support has a separate
+emergency-access workflow. Resellers receive narrower, delegated permissions.
+
+Security objectives include preventing cross-tenant access, fraudulent balance
+changes, incorrect charges, duplicate provisioning, unauthorized plan changes,
+payment replay, disclosure of subscriber information, and interruption of billing.
+
+In scope: the following 16 independently deployed microservices, their AWS
+infrastructure, delivery identities, customer and support applications, partner
+interfaces and payment integrations. Operator radio/core-network internals,
+physical SIM security, endpoint malware and payment-provider internals are outside
+this model. Their interfaces remain in scope. No AI or LLM subsystem is deployed.
+
+2. DEPLOYMENT CONTEXT
+
+Model environment: production.
+Deployment release: 26.09.
+Primary region: eu-west-1. Recovery region: eu-central-1.
+Production application account: 111122223333.
+Security logging account: 444455556666.
+Build and artifact account: 777788889999.
+Account identifiers are fictional examples and contain no credentials.
+
+All 16 microservices C1-C16 run as separate deployments on Amazon EKS, using
+managed EC2 node groups in private subnets across three availability zones.
+The EKS control-plane endpoint is private. Each service has its own Kubernetes
+service account and IAM role for service accounts. The actual permissions vary;
+do not assume that separate identities imply least-privilege policies.
+GitHub Actions builds images, ECR stores images, and Argo CD deploys releases.
+EKS is a hosting platform, not an extra application hop between every service.
+
+Aurora is a shared PostgreSQL cluster with separate service schemas and database
+roles. This is shared infrastructure, not a separate database cluster per tenant.
+DynamoDB stores usage deduplication and charging state. Redis stores sessions and
+caches. MSK carries usage and business events. SQS carries provisioning jobs.
+The invoice/document bucket and public product-assets bucket are separate buckets.
+KMS, Secrets Manager, CloudWatch and CloudTrail are infrastructure services.
+Do not count AWS managed services or external providers as extra microservices.
+
+3. COMPONENT INVENTORY
+
+[Table 1]
+Row 1: ID | Canonical ID | Component | Type | Technology | Responsibility / Data | Trust level
+Row 2: C1 | customer_account_service | Customer Account Service | API | Java Spring Boot on Amazon EKS | Customer organizations, billing accounts, addresses and tenant ownership | internal
+Row 3: C2 | subscriber_profile_service | Subscriber Profile Service | API | Node.js REST API on Amazon EKS | Subscriber profiles, MSISDN, IMSI, ICCID, plan association and subscriber identifiers | internal
+Row 4: C3 | product_catalog_service | Product Catalog Service | API | Java Spring Boot on Amazon EKS | Telecom products, bundles, eligibility rules and product metadata | internal
+Row 5: C4 | offer_pricing_service | Offer Pricing Service | API | Node.js REST API on Amazon EKS | Tariffs, discounts, promotions and price quotations | internal
+Row 6: C5 | order_orchestration_service | Order Orchestration Service | API | Java Spring Boot on Amazon EKS | New connections, plan changes, cancellations and business-event orchestration | internal
+Row 7: C6 | service_provisioning_service | Service Provisioning Service | Service | Go worker on Amazon EKS | Provisioning jobs and outbound operator OSS integration | internal
+Row 8: C7 | usage_mediation_service | Usage Mediation Service | API | Go ingestion API on Amazon EKS | Call-detail and usage records, validation, normalization and deduplication | internal
+Row 9: C8 | rating_charging_service | Rating Charging Service | Service | Java worker on Amazon EKS | Usage rating, charge calculation and prepaid charging requests | internal
+Row 10: C9 | balance_wallet_service | Balance Wallet Service | API | Java Spring Boot on Amazon EKS | Prepaid balances, reserved funds, debit transactions and credit adjustments | internal
+Row 11: C10 | invoice_billing_service | Invoice Billing Service | Service | Java worker on Amazon EKS | Billing cycles, invoice calculation, taxation and invoice PDFs | internal
+Row 12: C11 | payment_collections_service | Payment Collections Service | API | Node.js REST API on Amazon EKS | PaymentIntent creation, payment callbacks, refunds and collections | internal
+Row 13: C12 | partner_settlement_service | Partner Settlement Service | API | Java API and worker on Amazon EKS | Roaming partner reconciliation, commission, approval actions and settlement statements | internal
+Row 14: C13 | customer_support_service | Customer Support Service | API | Node.js REST API on Amazon EKS | Customer support cases, delegated access and emergency support actions | internal
+Row 15: C14 | notification_service | Notification Service | Service | Node.js worker on Amazon EKS | Invoice, balance and order email/SMS notifications | internal
+Row 16: C15 | fraud_analytics_service | Fraud Analytics Service | Service | Python rules-based worker on Amazon EKS | Deterministic usage anomaly rules and fraud alerts; no machine-learning or LLM model | internal
+Row 17: C16 | document_export_service | Document Export Service | API | Python API and worker on Amazon EKS | Invoice downloads, customer CSV exports and settlement export jobs | internal
+Row 18: C17 | customer_portal | Customer Portal | WebClient | React SPA | Subscriber self-service, balances, invoices and plan changes | public
+Row 19: C18 | operator_portal | Operator Portal | WebClient | React SPA | Operator administration, product configuration and support console | public
+Row 20: C19 | public_edge | Public Edge | API Gateway | Amazon CloudFront and AWS WAF | Public HTTPS ingress and configured WAF rules | public
+Row 21: C20 | application_ingress | Application Ingress | API Gateway | AWS Application Load Balancer and EKS ingress | Route permitted edge traffic to named application endpoints | internal
+Row 22: C21 | customer_identity | Customer Identity | Identity Provider | Amazon Cognito | Customer login and OAuth2/OIDC token issuance | restricted
+Row 23: C22 | workforce_identity | Workforce Identity | Identity Provider | Corporate OIDC identity provider | Operator and platform support authentication | external
+Row 24: C23 | business_database | Business Database | Database | Amazon Aurora PostgreSQL | Service-owned schemas containing subscriber PII, orders, balances and financial records | restricted
+Row 25: C24 | charging_state_store | Charging State Store | Database | Amazon DynamoDB | Usage deduplication records and charging checkpoints | restricted
+Row 26: C25 | session_cache | Session Cache | Database | Amazon ElastiCache Redis | Sessions, authorization caches, quotes and short-lived duplicate-event cache | restricted
+Row 27: C26 | event_stream | Event Stream | Queue | Amazon MSK | Usage, order, charging, billing and fraud events | internal
+Row 28: C27 | provisioning_queue | Provisioning Queue | Queue | Amazon SQS | Service activation/deactivation jobs and retries | internal
+Row 29: C28 | billing_documents | Billing Documents | Object Storage | Amazon S3 | Private invoice PDFs, settlement exports and customer CSV exports | restricted
+Row 30: C29 | product_assets | Product Assets | Object Storage | Amazon S3 | Publicly readable non-sensitive product graphics served through CloudFront | restricted
+Row 31: C30 | key_management | Key Management | Key Management | AWS KMS | Encryption keys used by data stores and application secrets | restricted
+Row 32: C31 | service_secrets | Service Secrets | Secrets Manager | AWS Secrets Manager | Database credentials and provider API secrets | restricted
+Row 33: C32 | support_search | Support Search | Database | Amazon OpenSearch | Tenant-tagged support case and subscriber search documents | restricted
+Row 34: C33 | application_logging | Application Logging | Service | Amazon CloudWatch Logs | Service telemetry, troubleshooting logs and application audit events | restricted
+Row 35: C34 | security_audit | Security Audit | Service | AWS CloudTrail in security account | AWS management-event audit trail | restricted
+Row 36: C35 | container_registry | Container Registry | Service | Amazon ECR | Service container images and build scan results | restricted
+Row 37: C36 | build_pipeline | Build Pipeline | External Entity | GitHub Actions | Build jobs and federated deployment credentials | external
+Row 38: C37 | deployment_controller | Deployment Controller | Service | Argo CD | Apply approved Kubernetes manifests to the EKS cluster | restricted
+Row 39: C38 | payment_provider | Payment Provider | External Entity | Stripe | Hosted card collection, payment processing and signed payment events | external
+Row 40: C39 | messaging_provider | Messaging Provider | External Entity | External email and SMS provider | Delivery of transactional messages | external
+Row 41: C40 | operator_oss | Operator OSS | External Entity | Operator provisioning APIs | Activate, suspend and modify network services | external
+Row 42: C41 | usage_collectors | Usage Collectors | External Entity | Operator mediation gateways | Submit usage and roaming records to the platform | external
+Row 43: C42 | roaming_partner | Roaming Partner | External Entity | Partner settlement endpoint | Receive settlement statements and acknowledge settlement batches | external
+
+4. LOGICAL TRUST BOUNDARIES
+
+These are security contexts, not declarations that every contained component is
+in the same subnet. AWS account ownership and network reachability are separate.
+
+[Table 2]
+Row 1: ID | Boundary | Trust level | Contents
+Row 2: TB1 | Customer and operator browsers | public | C17, C18
+Row 3: TB2 | Public edge | public | C19
+Row 4: TB3 | Private application execution | internal | C1, C2, C3, C4, C5, C6, C7, C8, C9, C10, C11, C12, C13, C14, C15, C16, C20
+Row 5: TB4 | Restricted production data and secrets | restricted | C23, C24, C25, C28, C29, C30, C31, C32
+Row 6: TB5 | Asynchronous event infrastructure | internal | C26, C27
+Row 7: TB6 | Identity trust | restricted | C21
+Row 8: TB7 | Delivery control plane | restricted | C35, C37
+Row 9: TB8 | Logging and security monitoring | restricted | C33, C34
+Row 10: TB9 | External organizations | external | C22, C36, C38, C39, C40, C41, C42
+
+5. EXPLICIT DATA FLOWS
+
+Each row below is an explicitly declared directed interaction. Return payloads
+are included in that interaction unless a separate asynchronous return is listed.
+Do not infer direct browser-to-database connections or a full mesh between all
+services. Cross-boundary summaries should use these paths, not guessed edges.
+Deployment relationships are described separately and are not business data flows.
+
+[Table 3]
+Row 1: ID | Source and destination | Protocol | Data | Evidence
+Row 2: F1 | C17 -> C19 | HTTPS | Customer API requests and access tokens | Declared
+Row 3: F2 | C18 -> C19 | HTTPS | Operator API requests and access tokens | Declared
+Row 4: F3 | C17 -> C21 | HTTPS | Customer OAuth2/OIDC login and token exchange | Declared
+Row 5: F4 | C18 -> C22 | HTTPS | Workforce OIDC login and token exchange | Declared
+Row 6: F5 | C19 -> C20 | HTTPS | Allowed API requests routed into the private application tier | Declared
+Row 7: F6 | C20 -> C1 | HTTPS | Customer-account operations | Declared
+Row 8: F7 | C20 -> C2 | HTTPS | Subscriber profile operations | Declared
+Row 9: F8 | C20 -> C3 | HTTPS | Product catalog requests | Declared
+Row 10: F9 | C20 -> C4 | HTTPS | Offer search and price quotations | Declared
+Row 11: F10 | C20 -> C5 | HTTPS | New connections and plan-change orders | Declared
+Row 12: F11 | C20 -> C9 | HTTPS | Balance queries and top-up status | Declared
+Row 13: F12 | C20 -> C11 | HTTPS | Payment requests and provider webhook callbacks | Declared
+Row 14: F13 | C20 -> C13 | HTTPS | Support cases and administrative actions | Declared
+Row 15: F14 | C20 -> C16 | HTTPS | Export job creation and document download requests | Declared
+Row 16: F15 | C41 -> C19 | HTTPS | Usage files and usage-record batches | Declared
+Row 17: F16 | C20 -> C7 | HTTPS | Usage batches from authenticated collectors | Declared
+Row 18: F17 | C1 -> C23 | TLS | Tenant and customer account records in account schema | Declared
+Row 19: F18 | C2 -> C23 | TLS | Subscriber PII in subscriber schema | Declared
+Row 20: F19 | C3 -> C23 | TLS | Product catalog and eligibility records in catalog schema | Declared
+Row 21: F20 | C4 -> C3 | HTTPS | Product and tariff lookup | Declared
+Row 22: F21 | C4 -> C23 | TLS | Offer search queries and price records in pricing schema | Declared
+Row 23: F22 | C4 -> C25 | TLS | Cached price quotations | Declared
+Row 24: F23 | C5 -> C1 | HTTPS | Customer eligibility and billing-account validation | Declared
+Row 25: F24 | C5 -> C2 | HTTPS | Subscriber ownership and current plan lookup | Declared
+Row 26: F25 | C5 -> C4 | HTTPS | Authoritative plan price quotation | Declared
+Row 27: F26 | C5 -> C23 | TLS | Order state in order schema | Declared
+Row 28: F27 | C5 -> C27 | HTTPS | Provisioning commands | Declared
+Row 29: F28 | C27 -> C6 | HTTPS | Delivery of queued provisioning jobs through SQS polling | Declared
+Row 30: F29 | C6 -> C40 | HTTPS | Operator activation, suspension and plan-change requests | Declared
+Row 31: F30 | C6 -> C26 | TLS | Provisioning completion or failure events | Declared
+Row 32: F31 | C26 -> C5 | TLS | Provisioning completion events consumed by order orchestration | Declared
+Row 33: F32 | C7 -> C24 | HTTPS | Usage-record identity and deduplication checkpoints | Declared
+Row 34: F33 | C7 -> C25 | TLS | Short-lived usage replay cache | Declared
+Row 35: F34 | C7 -> C26 | TLS | Normalized usage events including tenant and subscriber IDs | Declared
+Row 36: F35 | C26 -> C8 | TLS | Normalized usage events consumed for rating | Declared
+Row 37: F36 | C8 -> C4 | HTTPS | Applicable tariff and discount lookup | Declared
+Row 38: F37 | C8 -> C9 | HTTPS | Debit or reservation requests for prepaid charging | Declared
+Row 39: F38 | C8 -> C24 | HTTPS | Charging checkpoints | Declared
+Row 40: F39 | C8 -> C26 | TLS | Rated charge events | Declared
+Row 41: F40 | C9 -> C23 | TLS | Wallet balances and ledger transactions in wallet schema | Declared
+Row 42: F41 | C26 -> C10 | TLS | Rated charges consumed by billing | Declared
+Row 43: F42 | C10 -> C23 | TLS | Invoice and taxation records in billing schema | Declared
+Row 44: F43 | C10 -> C28 | HTTPS | Generated invoice PDFs | Declared
+Row 45: F44 | C10 -> C26 | TLS | Invoice-ready events | Declared
+Row 46: F45 | C11 -> C38 | HTTPS | PaymentIntent creation, capture and refund operations | Declared
+Row 47: F46 | C38 -> C19 | HTTPS | Payment-provider webhook deliveries to public callback paths | Declared
+Row 48: F47 | C11 -> C9 | HTTPS | Wallet credits following successful payment processing | Declared
+Row 49: F48 | C11 -> C23 | TLS | Payment ledger, event IDs and collection state | Declared
+Row 50: F49 | C26 -> C12 | TLS | Usage and charge events consumed for partner settlement | Declared
+Row 51: F50 | C12 -> C23 | TLS | Settlement calculations and partner reconciliation records | Declared
+Row 52: F51 | C12 -> C28 | HTTPS | Settlement report objects | Declared
+Row 53: F52 | C12 -> C42 | HTTPS | Partner settlement statements and acknowledgements | Declared
+Row 54: F53 | C13 -> C1 | HTTPS | Support lookup of customer accounts | Declared
+Row 55: F54 | C13 -> C2 | HTTPS | Support lookup and modification of subscriber data | Declared
+Row 56: F55 | C13 -> C25 | TLS | Support sessions and cached entitlements | Declared
+Row 57: F56 | C13 -> C32 | HTTPS | Search and indexing of support cases and subscriber metadata | Declared
+Row 58: F57 | C26 -> C14 | TLS | Invoice, balance and order events consumed for notifications | Declared
+Row 59: F58 | C14 -> C39 | HTTPS | Transactional email and SMS payloads | Declared
+Row 60: F59 | C26 -> C15 | TLS | Usage and charge events consumed by fraud rules | Declared
+Row 61: F60 | C15 -> C32 | HTTPS | Fraud alert indexing and investigation queries | Declared
+Row 62: F61 | C16 -> C23 | TLS | Authorized export queries against service-approved reporting views | Declared
+Row 63: F62 | C16 -> C28 | HTTPS | Export objects and invoice object retrieval | Declared
+Row 64: F63 | C17 -> C28 | HTTPS | Download through an issued invoice presigned URL | Declared
+Row 65: F64 | C19 -> C29 | HTTPS | Product images fetched by CloudFront from the assets bucket | Declared
+Row 66: F65 | C11 -> C31 | HTTPS | Payment-provider API secret retrieval | Declared
+Row 67: F66 | C6 -> C31 | HTTPS | Operator OSS credential retrieval | Declared
+Row 68: F67 | C28 -> C30 | HTTPS | S3 service encryption-key operations for private billing objects | Declared
+Row 69: F68 | C31 -> C30 | HTTPS | Secrets Manager service encryption-key operations | Declared
+Row 70: F69 | C13 -> C33 | HTTPS | Support application audit and troubleshooting logs | Declared
+Row 71: F70 | C11 -> C33 | HTTPS | Payment application audit and troubleshooting logs | Declared
+Row 72: F71 | C36 -> C35 | HTTPS | Built container images and scan artifacts | Declared
+Row 73: F72 | C37 -> C35 | HTTPS | Image manifest and digest retrieval for deployment | Declared
+Row 74: F73 | C17 -> C38 | HTTPS | Hosted payment-provider checkout and card-data entry; card data stays at the provider | Declared
+Row 75: F74 | C20 -> C12 | HTTPS | Authenticated operator settlement adjustments and payout approval requests | Declared
+
+AWS management API activity, including federated build-role activity, is captured
+by CloudTrail in Security Audit. AWS collects these events; Build Pipeline does
+not send its own application logs to CloudTrail. This is a control-plane audit
+relationship, not permission for applications to edit the
+security-account audit destination. Do not invent data-transfer edges for every
+possible AWS service pair merely because they share an account.
+
+6. PRIMARY BUSINESS WORKFLOWS
+
+W1 - New subscriber: Customer Portal -> Public Edge -> Application Ingress ->
+Order Orchestration Service. Order Orchestration Service separately calls Customer
+Account Service, Subscriber Profile Service and Offer Pricing Service, then sends
+a command to Provisioning Queue. Service Provisioning Service consumes the command,
+calls Operator OSS and publishes a completion event to Event Stream. Order
+Orchestration Service consumes that event. The three lookup services are not
+serial hops and do not publish the provisioning command.
+
+W2 - Prepaid usage charging: Usage Collectors -> Public Edge -> Application
+Ingress -> Usage Mediation Service -> Event Stream -> Rating Charging Service.
+Rating Charging Service calls Offer Pricing Service for the tariff, then separately
+calls Balance Wallet Service for a debit. Balance Wallet Service accesses Business
+Database. Offer Pricing Service does not call Balance Wallet Service.
+
+W3 - Postpaid billing: rated-charge events -> Invoice Billing Service -> Business
+Database and Billing Documents -> invoice-ready event -> Notification Service.
+
+W4 - Payment and top-up: Customer Portal -> Payment Collections Service through
+the edge and ingress -> Payment Provider. Customer Portal separately opens the
+provider-hosted checkout for card entry. The provider sends a separate callback
+through the edge and ingress to Payment Collections Service, which may then call
+Balance Wallet Service. A browser redirect is not payment-settlement evidence.
+
+W5 - Operator support/export: Operator Portal -> Workforce Identity for login;
+authenticated requests traverse the edge and ingress to Customer Support Service
+or Document Export Service. These services must enforce operator-tenant scope.
+
+W6 - Roaming settlement: rated usage events -> Partner Settlement Service ->
+Business Database and Billing Documents -> Roaming Partner.
+Partner Settlement Service accesses those stores and separately sends statements
+to Roaming Partner; the stores do not call the partner. Operator Portal submits
+settlement adjustments and approval requests through the edge and ingress to
+Partner Settlement Service.
+
+7. KNOWN ISSUES IN PRODUCTION RELEASE 26.09
+
+The following are explicit owner-declared weaknesses in this fictional scenario.
+They are not penetration-test results and must not be called runtime-verified.
+
+K01. Subscriber Profile Service accepts X-Tenant-ID from the request and uses it
+for database filtering without verifying that the authenticated subject belongs
+to that tenant. JWT signature validation still occurs.
+
+K02. Offer Pricing Service concatenates the sort/filter expression supplied to
+its administrative offer-search endpoint into a PostgreSQL query. Its ordinary
+price-quotation endpoint uses parameterized queries.
+
+K03. Order Orchestration Service trusts tenant_id and requested_action inside
+provisioning-completion events. It does not bind the event producer identity to
+the tenant or validate that the referenced order permits the requested transition.
+
+K04. Service Provisioning Service accepts an operator callback URL configured by
+a reseller and makes an outbound request without destination allowlisting or
+checking resolved addresses against private and link-local destinations.
+
+K05. Usage Mediation Service rejects duplicate record IDs only while a Redis
+cache entry exists for 15 minutes. The persisted DynamoDB checkpoint does not
+enforce uniqueness for the full billing replay window. Replayed usage records
+can therefore be charged again after the cache expires.
+
+K06. Rating Charging Service has no workload-specific concurrency quotas or
+per-tenant worker isolation. A single operator's bulk replay can occupy the worker
+pool shared with interactive prepaid charging. Public edge throttling is separate.
+
+K07. Balance Wallet Service implements debit as a read, balance check and later
+write without an atomic conditional update or equivalent serialized transaction.
+Concurrent debit requests can pass the check against the same old balance.
+
+K08. Invoice Billing Service issues invoice download URLs valid for 24 hours.
+Those URLs remain usable after customer account suspension or invoice access
+revocation; possession of a previously issued URL is sufficient for the download.
+
+K09. Payment Collections Service has a deprecated production route,
+/payments/webhooks/legacy, that skips webhook signature validation and does not
+reject previously processed provider event IDs. The primary webhook route has
+different controls, described in the supporting document.
+
+K10. Partner Settlement Service permits the same operator employee to modify a
+settlement adjustment and approve the resulting payout batch without independent
+approval or an enforced separation-of-duties check.
+
+K11. Customer Support Service caches support entitlements for 12 hours. Password
+reset, workforce account disablement and removal of a privileged support role do
+not invalidate existing sessions or cached entitlements immediately.
+
+K12. Document Export Service writes customer-supplied fields into CSV output
+without neutralizing spreadsheet formula prefixes. Exported fields can include
+subscriber names and customer-entered company labels.
+
+K13. Document Export Service has an IAM role allowing s3:GetObject and
+s3:ListBucket over every tenant prefix in Billing Documents, even though each
+export job is intended to operate for one tenant. A worker compromise crosses
+the intended object-access boundary unless another control prevents that path.
+
+K14. Event Stream uses a shared Kafka application principal for Rating Charging
+Service, Invoice Billing Service and Partner Settlement Service. Its topic ACLs
+allow each of those producers to write to order-completion and payment topics
+that their business role does not require.
+
+K15. Deployment Controller deploys some production services using mutable image
+tags rather than immutable digests. Container signature enforcement is planned
+for release 26.10 and is not enforced in 26.09.
+
+K16. Customer Support Service's troubleshooting mode writes bearer tokens and
+full subscriber identifiers into Application Logging. The support workload IAM
+role can also delete its own CloudWatch log group. Security Audit has a separate
+cross-account CloudTrail destination and must not be assumed deletable by that role.
+
+8. CONTROL AND EVIDENCE INTERPRETATION
+
+Upload the accompanying supporting-controls.md document for the implemented
+controls. Silence in this architecture prompt is not evidence that a control is
+absent. Explicit exceptions and narrower scopes must remain visible.
+Neither WAF presence, encryption at rest nor valid JWT signatures proves tenant
+authorization, correct payment state transitions, query safety or safe exports.
+Assess remaining unknown controls as questions or potential risks, not as confirmed
+missing implementations. Keep distinct root causes separate and merge genuinely
+duplicate findings only when the affected control and scope are the same.
+
+The requested review is a complete STRIDE assessment of this declared architecture,
+including component threats, trust-boundary flows, identity and IAM, async business
+logic, source/build integrity, payment processing and telecom charging integrity.
+Do not add technology-specific threats for technologies absent from the inventory.

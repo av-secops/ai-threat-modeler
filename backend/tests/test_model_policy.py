@@ -108,4 +108,4 @@ def test_a_missing_embedding_model_degrades_instead_of_failing(monkeypatch):
     assert service.is_available, "the TF-IDF fallback still produces vectors"
     status = model_policy.model_status()
     assert status["degraded_roles"] == ["embeddings"]
-    assert next(entry for entry in status["models"] if entry["role"] == "embeddings")["fallback"] == "tf-idf"
+    assert next(entry for entry in status["models"] if entry["role"] == "embeddings")["fallback"] == "bm25_local_hashing"

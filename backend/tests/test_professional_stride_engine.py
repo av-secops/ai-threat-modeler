@@ -37,7 +37,7 @@ def test_golden_scenario_is_exhaustive_grounded_and_actionable(analyzer, scenari
     categories_by_element = defaultdict(list)
     for cell in cells:
         categories_by_element[cell["element_id"]].append(cell["category"])
-        assert cell["status"] in {"finding", "control_present", "unknown", "not_applicable"}
+        assert cell["status"] in {"finding", "potential", "control_present", "unknown", "not_applicable"}
         assert cell["rationale"]
     expected_categories = Counter(STRIDE_CATEGORIES)
     for categories in categories_by_element.values():
@@ -92,4 +92,8 @@ def test_runtime_status_never_claims_unavailable_local_models_are_active(analyze
     local = result.engine_status["local_intelligence"]
     assert local["status"] in {"active", "degraded", "unavailable", "disabled"}
     if local["status"] != "active":
-        assert local["semantic_retrieval"] != "active" or local["stride_classifier"] != "active"
+        assert (
+            local["semantic_retrieval"] != "active"
+            or local["stride_classifier"] != "active"
+            or local["reranker"] != "cross_encoder"
+        )

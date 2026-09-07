@@ -1,0 +1,23 @@
+{
+  "schema_version": "benchmark-review-1.0",
+  "reviews": [
+    {"id":"healthcare_identity_fhir","source_format":"natural_language","reviewed_by":"maintainer-security-baseline","reviewed_at":"2026-08-29","split":"holdout","scenario_version":"1.0"},
+    {"id":"aws_serverless_data_platform","source_format":"natural_language","reviewed_by":"maintainer-security-baseline","reviewed_at":"2026-08-29","split":"holdout","scenario_version":"1.0"},
+    {"id":"multi_tenant_saas","source_format":"natural_language","reviewed_by":"maintainer-security-baseline","reviewed_at":"2026-08-29","split":"holdout","scenario_version":"1.0"},
+    {"id":"rag_agent_mcp","source_format":"natural_language","reviewed_by":"maintainer-security-baseline","reviewed_at":"2026-08-29","split":"holdout","scenario_version":"1.0"},
+    {"id":"payment_processing","source_format":"natural_language","reviewed_by":"maintainer-security-baseline","reviewed_at":"2026-08-29","split":"holdout","scenario_version":"1.0"},
+    {"id":"web_api_injection","source_format":"natural_language","reviewed_by":"maintainer-security-baseline","reviewed_at":"2026-08-29","split":"holdout","scenario_version":"1.0"},
+    {"id":"kubernetes_supply_chain","source_format":"natural_language","reviewed_by":"maintainer-security-baseline","reviewed_at":"2026-08-29","split":"holdout","scenario_version":"1.0"},
+    {"id":"resilience_and_deletion","source_format":"natural_language","reviewed_by":"maintainer-security-baseline","reviewed_at":"2026-08-29","split":"holdout","scenario_version":"1.0"},
+    {"id":"simple_node_keycloak_ec2_s3","source_format":"natural_language","reviewed_by":"maintainer-security-baseline","reviewed_at":"2026-08-29","split":"holdout","scenario_version":"1.0"},
+    {"id":"customer_api_explicit_vulnerabilities","source_format":"natural_language","reviewed_by":"maintainer-security-baseline","reviewed_at":"2026-08-29","split":"holdout","scenario_version":"1.0"},
+    {"id":"advanced_multi_tenant_saas","source_format":"natural_language","reviewed_by":"maintainer-security-baseline","reviewed_at":"2026-08-29","split":"holdout","scenario_version":"1.0"},
+    {"id":"advanced_aws_serverless","source_format":"natural_language","reviewed_by":"maintainer-security-baseline","reviewed_at":"2026-08-29","split":"holdout","scenario_version":"1.0"},
+    {"id":"advanced_aws_eks_supply_chain","source_format":"natural_language","reviewed_by":"maintainer-security-baseline","reviewed_at":"2026-08-29","split":"holdout","scenario_version":"1.0"},
+    {"id":"advanced_multi_tenant_rag","source_format":"natural_language","reviewed_by":"maintainer-security-baseline","reviewed_at":"2026-08-29","split":"holdout","scenario_version":"1.0"},
+    {"id":"advanced_agent_mcp","source_format":"natural_language","reviewed_by":"maintainer-security-baseline","reviewed_at":"2026-08-29","split":"holdout","scenario_version":"1.0"},
+    {"id":"advanced_payment_commerce","source_format":"natural_language","reviewed_by":"maintainer-security-baseline","reviewed_at":"2026-08-29","split":"holdout","scenario_version":"1.0"},
+    {"id":"advanced_hybrid_healthcare","source_format":"natural_language","reviewed_by":"maintainer-security-baseline","reviewed_at":"2026-08-29","split":"holdout","scenario_version":"1.0"},
+    {"id":"advanced_multicloud_agentic_saas","source_format":"natural_language","reviewed_by":"maintainer-security-baseline","reviewed_at":"2026-08-29","split":"holdout","scenario_version":"1.0"}
+  ]
+}

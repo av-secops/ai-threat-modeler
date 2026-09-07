@@ -61,7 +61,8 @@ def test_hard_negative_filter_rejects_incompatible_component_and_cloud():
     assert "incompatible_cloud" in reasons
 
 
-def test_security_reranker_records_backend_and_score():
+def test_security_reranker_records_backend_and_score(monkeypatch):
+    monkeypatch.setenv("AEGIS_THREAT_RERANKER_MODEL", "disabled")
     reranker = SecurityReranker()
     metadata = {
         "original": {

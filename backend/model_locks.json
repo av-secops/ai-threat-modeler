@@ -1,8 +1,32 @@
 {
   "comment": "Revisions this deployment is pinned to. Loads are offline and refuse a different revision. Regenerate with: AEGIS_THREAT_ALLOW_MODEL_DOWNLOAD=1 python tools/prefetch_models.py --write-lock",
   "models": {
-    "all-MiniLM-L6-v2": {
+    "BAAI/bge-base-en-v1.5": {
       "role": "embeddings",
+      "revision": "a5beb1e3e68b9ab74eb54cfd186867f64f240e1a",
+      "source": "BAAI/bge-base-en-v1.5",
+      "required": true
+    },
+    "BAAI/bge-reranker-base": {
+      "role": "reranker",
+      "revision": "2cfc18c9415c912f9d8155881c133215df768a70",
+      "source": "BAAI/bge-reranker-base",
+      "required": false
+    },
+    "BAAI/bge-large-en-v1.5": {
+      "role": "embeddings_accuracy",
+      "revision": "d4aa6901d3a41ba39fb536a557fa166f842b0e09",
+      "source": "BAAI/bge-large-en-v1.5",
+      "required": false
+    },
+    "BAAI/bge-reranker-large": {
+      "role": "reranker_accuracy",
+      "revision": "55611d7bca2a7133960a6d3b71e083071bbfc312",
+      "source": "BAAI/bge-reranker-large",
+      "required": false
+    },
+    "all-MiniLM-L6-v2": {
+      "role": "embeddings_fast",
       "revision": "c9745ed1d9f207416be6d2e6f8de32d1f16199bf",
       "source": "sentence-transformers/all-MiniLM-L6-v2",
       "required": true

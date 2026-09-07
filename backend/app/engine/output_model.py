@@ -135,7 +135,7 @@ def group_findings(threats) -> Dict[str, List]:
 
 def risk_methodology() -> Dict[str, Any]:
     return {
-        "version": "technical-v3",
+        "version": "technical-v4",
         "inputs": [
             "internet exposure",
             "asset sensitivity",
@@ -169,6 +169,11 @@ def risk_methodology() -> Dict[str, Any]:
             "Asset sensitivity is the most sensitive classification carried by the finding's "
             "components and flows. A classification stated about one component is carried along "
             "the flows that data travels, and never overrides one stated outright."
+        ),
+        "system_score_rule": (
+            "The system score groups equivalent findings by affected scope and root control, "
+            "then applies diminishing impact so large models do not mechanically saturate at zero. "
+            "Potential findings are reported as a separate uncertainty penalty."
         ),
     }
 

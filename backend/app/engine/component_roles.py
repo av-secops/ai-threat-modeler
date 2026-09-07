@@ -105,6 +105,7 @@ NON_IDENTIFYING = frozenset({
     "run", "exposes", "expose", "returns", "return", "receives", "receive",
     "accepts", "accept", "provides", "provide", "handles", "handle",
     "connects", "connect", "hosts", "host", "serves", "serve",
+    "logs", "log",
     "also", "then", "there", "here", "when", "where", "which", "who", "whose",
     "what", "how", "why", "but", "not", "no",
 })

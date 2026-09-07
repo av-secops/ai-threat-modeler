@@ -109,7 +109,27 @@ def test_a_stated_weakness_is_not_reported_twice():
     )
     mfa_findings = [
         threat for threat in result.threats
-        if 'multi-factor' in threat.title and threat.affected_component == 'admin_portal'
+        if 'multi-factor' in threat.title.lower() and threat.affected_component == 'admin_portal'
     ]
 
     assert len(mfa_findings) == 1
+
+
+def test_unscoped_explicit_weakness_is_retained_as_confirmed_and_unmapped():
+    description = (
+        'An AI operations platform uses an agent service and a tenant vector index. '
+        'Retrieved support tickets are inserted into system instructions without separating instructions.'
+    )
+
+    result = ThreatAnalyzer().analyze_from_text(
+        description, project_name='Unscoped Weakness Test', use_local_slm=False,
+    )
+    finding = next(
+        threat for threat in result.threats
+        if threat.id.startswith('GENERIC-INDIRECT-PROMPT-INJECTION-001')
+    )
+
+    assert finding.tier == 'Confirmed'
+    assert finding.confidence == 'High'
+    assert finding.component is None
+    assert finding.explanation['scope_resolution'] == 'unresolved_explicit_statement'

@@ -1,6 +1,7 @@
 [
   {
     "threat_id": "AI-001",
+    "version": "1.1.0",
     "threat_name": "Direct Prompt Injection Against LLM Controls",
     "component": ["API", "Service", "WebClient", "ML Service"],
     "cloud_platform": ["AWS", "Azure", "GCP", "On-Premise"],
@@ -17,7 +18,8 @@
           { "field": "public_access", "op": "==", "value": true }
         ]
       },
-      "auto_detectable": true,
+      "auto_detectable": false,
+      "evidence_requirement": "candidate_only",
       "confidence": "high"
     },
     "mitigations": [
@@ -40,6 +42,7 @@
   },
   {
     "threat_id": "AI-002",
+    "version": "1.1.0",
     "threat_name": "Indirect Prompt Injection Through Retrieved or Plugin Content",
     "component": ["API", "Service", "WebClient", "ML Service", "Object Storage", "Database"],
     "cloud_platform": ["AWS", "Azure", "GCP", "On-Premise"],
@@ -56,7 +59,8 @@
           { "field": "input_validation", "op": "==", "value": false }
         ]
       },
-      "auto_detectable": true,
+      "auto_detectable": false,
+      "evidence_requirement": "candidate_only",
       "confidence": "high"
     },
     "mitigations": [
@@ -105,6 +109,7 @@
   },
   {
     "threat_id": "AI-004",
+    "version": "1.1.0",
     "threat_name": "Model or Sensitive Context Exfiltration via Inference API",
     "component": ["API", "Service", "ML Service", "Database"],
     "cloud_platform": ["AWS", "Azure", "GCP", "On-Premise"],
@@ -121,7 +126,8 @@
           { "field": "public_access", "op": "==", "value": true }
         ]
       },
-      "auto_detectable": true,
+      "auto_detectable": false,
+      "evidence_requirement": "candidate_only",
       "confidence": "high"
     },
     "mitigations": [
@@ -143,11 +149,13 @@
   },
   {
     "threat_id": "AI-005",
-    "threat_name": "Training Data Poisoning",
+    "version": "1.1.0",
+    "negating_controls": ["training_data_validation"],
+    "threat_name": "Training data validation absent",
     "component": ["ML Service", "Data Warehouse", "Object Storage", "Service"],
     "cloud_platform": ["AWS", "Azure", "GCP", "On-Premise"],
     "stride_category": "Tampering",
-    "attack_vector": "An attacker poisons training or fine-tuning data so the model learns unsafe behavior, hidden triggers, biased outputs, or harmful failure modes.",
+    "attack_vector": "Unvalidated training or fine-tuning data may allow an attacker to introduce hidden triggers or unsafe behavior. A stated validation gap does not establish that the dataset or model has actually been poisoned.",
     "likelihood": "Medium",
     "impact": "High",
     "affected_cia": ["Integrity"],
@@ -156,7 +164,7 @@
         "operator": "AND",
         "conditions": [
           { "field": "ml_pipeline", "op": "==", "value": true },
-          { "field": "logging_enabled", "op": "==", "value": false }
+          { "field": "training_data_validation", "op": "==", "value": false }
         ]
       },
       "auto_detectable": true,
