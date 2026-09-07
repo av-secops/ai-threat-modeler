@@ -540,13 +540,6 @@ The dashboard supports finding states such as open, mitigated, accepted, and fal
 
 ### Known Limitations in This 2.3.1 Update
 
-The [Nexora telecom scenario review](docs/scenarios/nexora-telecom-26.09/chrome-review-2026-09-07.md)
-found missed declared weaknesses, explanatory sentences misread as absent
-controls, incorrect data classification, and a false control conflict that
-blocked final export. Large diagrams can also simplify away important flows
-and draw boundaries differently from the declared model. These analysis defects
-are documented, not fixed by this startup/documentation update.
-
 Treat this release as an assisted review tool, not a security sign-off engine.
 "Confirmed" means the engine found supporting input evidence, not that the
 deployment was tested. "100% STRIDE assessed" is not complete threat coverage;
