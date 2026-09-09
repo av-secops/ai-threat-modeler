@@ -33,7 +33,7 @@ torch>=2.2.0,<3.0.0
 # Semantic retrieval and local ML
 sentence-transformers>=3.4.0,<4.0.0
 faiss-cpu>=1.10.0,<2.0.0
-scikit-learn>=1.4.0,<2.0.0
+scikit-learn>=1.9.0,<2.0.0
 
 # Offline fine-tuning and governed dataset evaluation
 datasets>=3.2.0,<5.0.0
