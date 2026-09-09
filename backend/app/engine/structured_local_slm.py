@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import os
 from typing import Any, Dict, List
 
@@ -87,14 +88,33 @@ class StructuredLocalSLM:
         accepted = []
         rejected = 0
         for item in candidates if isinstance(candidates, list) else []:
+            if not isinstance(item, dict) or not isinstance(item.get('evidence'), list):
+                rejected += 1
+                continue
             element_id = str(item.get("element_id") or "")
             category = str(item.get("stride_category") or "")
-            evidence = [str(value) for value in item.get("evidence") or [] if value]
+            evidence = item['evidence']
+            if not all(isinstance(value, str) for value in evidence):
+                rejected += 1
+                continue
+            target = next((c for c in architecture.components if c.id == element_id), None)
+            def mentioned(names):
+                return any(re.search(r'(?<!\w)' + re.escape(name) + r'(?!\w)', quote, re.I) for name in names if name for quote in evidence)
+            if target:
+                bound = mentioned((target.id, target.name))
+            elif element_id.startswith('flow:'):
+                endpoints = element_id[5:].split('->')
+                components = {c.id: c for c in architecture.components}
+                bound = len(endpoints) == 2 and all(cid in components and mentioned((cid, components[cid].name)) for cid in endpoints)
+            else:
+                bound = mentioned((element_id.partition(':')[2],))
             valid = (
                 element_id in element_ids
                 and category in STRIDE_CATEGORIES
                 and (element_id, category) in unknown
                 and evidence
+                and bound
+                and len(evidence) <= 10 and all(8 <= len(value) <= 2000 for value in evidence)
                 and all(value.lower() in source_lower for value in evidence)
             )
             if not valid:
@@ -103,9 +123,9 @@ class StructuredLocalSLM:
             accepted.append({
                 "element_id": element_id,
                 "stride_category": category,
-                "title": str(item.get("title") or "Local model review candidate"),
+                "title": str(item.get("title") or "Local model review candidate")[:240],
                 "evidence": evidence,
-                "question": str(item.get("question") or "What control confirms or negates this candidate?"),
+                "question": str(item.get("question") or "What control confirms or negates this candidate?")[:2000],
                 "status": "information_required",
             })
         return accepted, rejected

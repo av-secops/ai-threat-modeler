@@ -62,6 +62,7 @@ def canonicalize_architecture(architecture: SystemArchitecture) -> Tuple[SystemA
 
     for component in architecture.components or []:
         props = component.properties or {}
+        props['canonical_boundaries'] = sorted(b.name for b in architecture.trust_boundaries if component.id in b.components)
         line_number, statement = _find_component_evidence(source_text, component.name, component.id, index)
         explicit = bool(statement) or bool(props.get("authoritative") or props.get("authoritative_external_entity"))
         component.confidence = "High" if explicit else "Medium"
@@ -191,6 +192,8 @@ def canonicalize_architecture(architecture: SystemArchitecture) -> Tuple[SystemA
 
     architecture.metadata = metadata
     correlation = reconcile_claims(architecture)
+    from .literal_security import apply_literal_settings
+    apply_literal_settings(architecture)
     metadata = architecture.metadata
     if correlation['facts']:
         reconciled = {c.id for c in architecture.components if c.properties.get('correlated_controls')}

@@ -22,7 +22,7 @@ function downloadBlob(filename, content, type) {
   URL.revokeObjectURL(url);
 }
 
-export default function AnalystWorkbench({ data, projectName, reviewStates, annotationScope, mode = 'assurance' }) {
+export default function AnalystWorkbench({ data, projectName, reviewStates, annotationScope, mode = 'assurance', readOnly = false }) {
   const reviewKey = annotationScope || projectName;
   const [owners, setOwners] = useState(() => loadAnnotations(reviewKey).owners);
   const [notes, setNotes] = useState(() => loadAnnotations(reviewKey).notes);
@@ -43,8 +43,8 @@ export default function AnalystWorkbench({ data, projectName, reviewStates, anno
   }
 
   useEffect(() => {
-    saveAnnotations(reviewKey, { owners, notes, componentNotes });
-  }, [reviewKey, owners, notes, componentNotes]);
+    if (!readOnly) saveAnnotations(reviewKey, { owners, notes, componentNotes });
+  }, [reviewKey, owners, notes, componentNotes, readOnly]);
 
   const orphans = useMemo(
     () => orphanedAnnotations({ owners, notes }, (data.threats || []).map((threat) => threat.id)),
@@ -109,11 +109,12 @@ export default function AnalystWorkbench({ data, projectName, reviewStates, anno
                     <p className="text-xs text-brand-500 dark:text-brand-400">{component.type}</p>
                   </div>
                   <span className={clsx('rounded-full px-2.5 py-1 text-[10px] font-semibold', domainTone[data.domain_context?.profile || 'general'])}>
-                    {component.properties?.trust_boundary || component.trust_level || 'unknown'}
+                    {component.trust_level || component.properties?.trust_boundary || 'unknown'}
                   </span>
                 </summary>
                 <textarea
                   aria-label={`Validation note for ${component.name}`}
+                  readOnly={readOnly}
                   value={componentNotes[component.id] || ''}
                   onChange={(e) => setComponentNotes((prev) => ({ ...prev, [component.id]: e.target.value }))}
                   placeholder="Validation note for this component..."
@@ -128,9 +129,9 @@ export default function AnalystWorkbench({ data, projectName, reviewStates, anno
   }
 
   return (
-    <section className="mt-8 grid gap-6 xl:grid-cols-2">
-        <div className="ui-panel p-6">
-          <div className="flex items-center justify-between gap-3">
+    <section className="mt-8 grid min-w-0 grid-cols-1 gap-6 xl:grid-cols-2">
+        <div className="min-w-0 border-y border-brand-200 py-5 dark:border-brand-700">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <MessageSquareQuote className="h-5 w-5 text-brand-primary" />
               <h3 className="text-lg font-bold text-brand-950 dark:text-white">Domain lens</h3>
@@ -161,8 +162,8 @@ export default function AnalystWorkbench({ data, projectName, reviewStates, anno
             </div>
           </div>
         </div>
-        <div className="ui-panel p-6">
-          <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0 border-y border-brand-200 py-5 dark:border-brand-700">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <ListTodo className="h-5 w-5 text-brand-primary" />
               <h3 className="text-lg font-bold text-brand-950 dark:text-white">Action register</h3>
@@ -197,12 +198,14 @@ export default function AnalystWorkbench({ data, projectName, reviewStates, anno
                   <input
                     value={owners[row.id] || ''}
                     onChange={(e) => setOwners((prev) => ({ ...prev, [row.id]: e.target.value }))}
+                    readOnly={readOnly}
                     placeholder="Owner"
                     className="input-brand text-sm"
                   />
                   <input
                     value={notes[row.id] || ''}
                     onChange={(e) => setNotes((prev) => ({ ...prev, [row.id]: e.target.value }))}
+                    readOnly={readOnly}
                     placeholder="Action note or next step"
                     className="input-brand text-sm"
                   />

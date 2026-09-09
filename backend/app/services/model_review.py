@@ -8,6 +8,7 @@ state or uploaded code execution is needed to resume a review.
 import hashlib
 import json
 from collections import OrderedDict
+from copy import deepcopy
 from functools import lru_cache
 from threading import RLock
 from datetime import datetime, timezone
@@ -21,7 +22,7 @@ from ..engine.canonical_model import canonicalize_architecture
 from ..engine.control_contracts import presence
 from ..engine.stride_coverage_engine import StrideCoverageEngine
 from ..engine.control_statements import CONTROL_TERMS
-from ..engine.mermaid_generator import generate_mermaid, _sanitize_id
+from ..engine.canonical_diagram import render_view, identifier as _sanitize_id
 from ..engine.graph_builder import GraphBuilder
 from ..engine.source_correlation import control_dependency_digest
 
@@ -104,6 +105,7 @@ class ModelReviewRequest(BaseModel):
     input_kind: Literal['architecture', 'iac'] = 'architecture'
     environment: str = Field(default='', max_length=100)
     deployment_version: str = Field(default='', max_length=100)
+    workflows: list[dict] = Field(default_factory=list, max_length=100)
 
     @model_validator(mode='after')
     def bound_input(self):
@@ -379,10 +381,24 @@ def prepare_model(payload: ModelReviewRequest):
         raise ValueError('The parsed model exceeds the review size limit.')
     architecture.metadata = {**(architecture.metadata or {}), 'source_documents': documents or (architecture.metadata or {}).get('source_documents', []),
         'source_text': text or (architecture.metadata or {}).get('source_text', '')}
+    _apply_edits(architecture, payload.edits, warnings)
+    if payload.workflows:
+        from ..engine.workflow_checks import INVARIANTS
+        ids = {c.id for c in architecture.components}
+        for workflow in payload.workflows:
+            if not workflow.get('id') or not workflow.get('name') or not workflow.get('components') or not set(workflow.get('components', [])) <= ids:
+                raise ValueError('Workflows require an ID, name and modeled components.')
+            if any(k not in INVARIANTS or (v is not None and not isinstance(v, bool)) for k, v in workflow.get('invariants', {}).items()):
+                raise ValueError('Workflow controls must use supported invariant names and true, false or null.')
+            for record in workflow.get('evidence', []):
+                if not isinstance(record, dict) or not isinstance(record.get('statement'), str) or not record['statement'].strip() or record.get('control') not in INVARIANTS:
+                    raise ValueError('Workflow evidence requires a source statement.')
+                if record.get('source_type') != 'reviewer_clarification' and record['statement'] not in text:
+                    raise ValueError('Workflow evidence must quote an included source or identify a reviewer clarification.')
+    architecture.metadata['workflows'] = deepcopy(payload.workflows)
     source_digest = digest({'sources': [s.model_dump() for s in payload.sources if s.included],
         'baseline': payload.baseline.model_dump() if payload.baseline else None,
-        'edits': [e.model_dump() for e in payload.edits]})
-    _apply_edits(architecture, payload.edits, warnings)
+        'edits': [e.model_dump() for e in payload.edits], 'workflows': payload.workflows})
     for component in architecture.components:
         for key, value in [('environment', payload.environment), ('deployment_version', payload.deployment_version)]:
             if value and not component.properties.get(key):
@@ -427,5 +443,5 @@ def prepare_model(payload: ModelReviewRequest):
         'flows': [{**f.model_dump(), 'review_id': flow_id(f)} for f in architecture.flows],
         'diagram_bindings': {'nodes': [{'diagram_id': _sanitize_id(c.id), 'element_id': c.id} for c in architecture.components],
             'flows': [{'source': _sanitize_id(f.source_id), 'target': _sanitize_id(f.target_id), 'element_id': flow_id(f)} for f in architecture.flows]},
-        'diagram': generate_mermaid(GraphBuilder(architecture).get_graph(), enhanced=True),
+        'diagram': render_view(architecture)['diagram'],
         'prepared_at': datetime.now(timezone.utc).isoformat()}

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import AssuranceEvidence from './dashboard/AssuranceEvidence';
 import {
     BadgeCheck,
     BarChart3,
@@ -59,7 +60,7 @@ const resizeDiagramSvg = (svgElement, zoom) => {
     svgElement.style.maxHeight = 'none';
 };
 
-export default function ThreatDashboard({ data, projectName, onReanalyze, onReviewModel, onClarify, onProposeUpdate, annotationScope, isAnalyzing, darkMode = false, sidebarCollapsed = true }) {
+export default function ThreatDashboard({ data, projectName, onReanalyze, onReviewModel, onClarify, onProposeUpdate, annotationScope, isAnalyzing, darkMode = false, sidebarCollapsed = true, readOnly = false }) {
     const reviewKey = annotationScope || projectName;
     const mermaidRef = useRef(null);
     const diagramViewportRef = useRef(null);
@@ -68,6 +69,9 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, onRevi
     const [reviewStates, setReviewStates] = useState({});
     const [selectedThreat, setSelectedThreat] = useState(null);
     const [diagramZoom, setDiagramZoom] = useState(1);
+    const [diagramView, setDiagramView] = useState('system');
+    const selectedDiagram = data?.engine_status?.diagram_views?.find(view => view.id === diagramView);
+    const displayedDiagram = selectedDiagram?.diagram || data?.diagram;
     const diagramZoomRef = useRef(1);
     const [filters, setFilters] = useState({
         severity: 'all',
@@ -104,7 +108,7 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, onRevi
 
                 mermaidRef.current.innerHTML = '';
                 const diagramId = `mermaid-diagram-${Date.now()}`;
-                const { svg } = await mermaid.render(diagramId, data.diagram);
+                const { svg } = await mermaid.render(diagramId, displayedDiagram);
                 if (cancelled || !mermaidRef.current) return;
                 mermaidRef.current.innerHTML = svg;
 
@@ -117,8 +121,9 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, onRevi
                             node.style.setProperty('stroke', '#8897aa', 'important');
                         });
                         svgElement.querySelectorAll('.node rect, .node circle, .node ellipse, .node polygon, .node path').forEach((node) => {
+                            const confirmed = node.closest('.dfdFinding') || ['#dc2626', 'rgb(220, 38, 38)'].includes(node.style.stroke);
                             node.style.setProperty('fill', '#252f3d', 'important');
-                            node.style.setProperty('stroke', node.closest('.dfdFinding') ? '#f87171' : '#cbd5e1', 'important');
+                            node.style.setProperty('stroke', confirmed ? '#f87171' : '#cbd5e1', 'important');
                         });
                         svgElement.querySelectorAll('.nodeLabel, .nodeLabel *, .cluster-label, .cluster-label *, .edgeLabel, .edgeLabel *, text').forEach((node) => {
                             node.style.setProperty('color', '#f1f5f9', 'important');
@@ -145,7 +150,7 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, onRevi
 
         renderDiagram();
         return () => { cancelled = true; };
-    }, [activeView, data, darkMode]);
+    }, [activeView, data, darkMode, displayedDiagram]);
 
     useEffect(() => {
         diagramZoomRef.current = diagramZoom;
@@ -199,6 +204,7 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, onRevi
     }, [data, reviewKey]);
 
     const updateReviewState = (threatId, state) => {
+        if (readOnly) return;
         setReviewStates((prev) => {
             const next = { ...prev, [threatId]: state };
             saveAnnotations(reviewKey, { reviewStates: next });
@@ -231,7 +237,7 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, onRevi
             : 'Technical review';
     const integrityViolations = qualityGate.integrity_violations || [];
     const completenessWarnings = qualityGate.completeness_warnings || [];
-    const diagramCoverage = engineStatus.diagram_coverage;
+    const diagramCoverage = selectedDiagram?.coverage || engineStatus.diagram_coverage;
     const assumptions = data.coverage?.assumptions || [];
     const diffSummary = data.diff_summary;
     const followUpQuestions = data.follow_up_questions || [];
@@ -289,7 +295,7 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, onRevi
     const copyDiagramCode = async () => {
         if (!data?.diagram) return;
         try {
-            await navigator.clipboard.writeText(data.diagram);
+            await navigator.clipboard.writeText(displayedDiagram);
             setCopiedDiagram(true);
             toast.success('Diagram code copied to clipboard');
             setTimeout(() => setCopiedDiagram(false), 2000);
@@ -520,6 +526,7 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, onRevi
                     <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                         <div className="text-center lg:text-left">
                             <h3 className="text-lg font-bold text-brand-950 dark:text-white">Architecture view</h3>
+                            {engineStatus.diagram_views?.length > 1 && <select aria-label="Architecture scope" className="input-brand mt-2 text-sm" value={diagramView} onChange={e => setDiagramView(e.target.value)}>{engineStatus.diagram_views.map(view => <option key={view.id} value={view.id}>{view.name}</option>)}</select>}
                             <p className="mt-1 text-sm text-brand-600 dark:text-brand-400">Trust boundaries and boundary-crossing flows are highlighted directly on the modeled system map.</p>
                         </div>
                         <div className="flex items-center justify-center gap-2">
@@ -600,9 +607,10 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, onRevi
                     reviewStates={reviewStates}
                     annotationScope={reviewKey}
                     mode="architecture"
+                    readOnly={readOnly}
                 />
 
-                {onReviewModel ? <button type="button" className="ui-button-secondary mt-5" onClick={onReviewModel} disabled={isAnalyzing}><Pencil size={16} />Edit modeled architecture</button> : onReanalyze && (
+                {onReviewModel ? <button type="button" className="ui-button-secondary mt-5" onClick={onReviewModel} disabled={isAnalyzing}><Pencil size={16} />Edit modeled architecture</button> : !readOnly && onReanalyze && (
                     <section className="mt-8">
                         <ArchitectureModelEditor
                             document={data.architecture_document}
@@ -618,6 +626,7 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, onRevi
             </section>}
 
             {activeView === 'assurance' && <section className="mt-8 space-y-4">
+                <AssuranceEvidence status={engineStatus} threats={allThreatsSorted} onSelect={setSelectedThreat} onClarify={onClarify} />
                 <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Supporting detail</h2>
 
                 {(evidenceRequests || followUpQuestions.length > 0) && (
@@ -672,7 +681,8 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, onRevi
                             // the boundaries it had found.
                             ['Trust boundaries', data.coverage?.trust_boundaries_modeled ?? 0],
                             ['Public entry points', systemModel.public_entry_points?.length ?? 0],
-                            ['Boundary crossings', systemModel.boundary_crossings?.length ?? 0],
+                            ['Stated boundary crossings', systemModel.boundary_crossings?.length ?? 0],
+                            ['Assumed boundary crossings', systemModel.inferred_boundary_crossings?.length ?? 0],
                             ['Cloud resources', systemModel.cloud_resources?.length ?? 0],
                         ].map(([label, value]) => (
                             <div key={label} className="rounded-lg border border-brand-200 px-4 py-3 dark:border-brand-700">
@@ -770,6 +780,7 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, onRevi
                     projectName={projectName}
                     reviewStates={reviewStates}
                     annotationScope={reviewKey}
+                    readOnly={readOnly}
                 />
             </section>}
 
@@ -861,7 +872,7 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, onRevi
             <RiskDetailsModal
                 threat={selectedThreat}
                 reviewState={selectedThreat ? reviewStates[selectedThreat.id] || 'open' : 'open'}
-                onReviewStateChange={updateReviewState}
+                onReviewStateChange={readOnly ? undefined : updateReviewState}
                 onClose={() => setSelectedThreat(null)}
             />
         </div>

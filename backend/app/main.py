@@ -43,15 +43,20 @@ MAX_TRACKED_PROJECTS = int(os.getenv("AEGIS_THREAT_MAX_TRACKED_PROJECTS", "50"))
 async def lifespan(app: FastAPI):
     """Warm expensive analyzer dependencies once at startup."""
     app.state.threat_analyzer = ThreatAnalyzer()
+    from .services.enterprise_api import start_enterprise
+    start_enterprise(app)
     yield
+    app.state.job_runner.stop()
 
 
 app = FastAPI(
     title="Aegis Threat API", 
-    version="2.3.1",
+    version="2.3.2",
     description="Aegis Threat API for AI-assisted threat modeling and architecture risk analysis",
     lifespan=lifespan
 )
+from .services.enterprise_api import router as enterprise_router
+app.include_router(enterprise_router)
 
 if ENVIRONMENT == "production":
     if "*" in ALLOWED_ORIGINS:
@@ -63,7 +68,7 @@ if ENVIRONMENT == "production":
         CORSMiddleware,
         allow_origins=ALLOWED_ORIGINS,
         allow_credentials=True,
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "PUT", "PATCH"],
         allow_headers=["Content-Type", "Authorization"],
     )
 else:
@@ -891,7 +896,7 @@ def health_check():
     
     return {
         "status": "ok",
-        "version": "2.3.1",
+        "version": "2.3.2",
         "environment": ENVIRONMENT,
         "ml_features": ml_features,
         "retrieval": retrieval_monitor.snapshot(),

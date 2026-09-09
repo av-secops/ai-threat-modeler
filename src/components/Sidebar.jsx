@@ -2,6 +2,7 @@ import React from 'react';
 import { Shield, Zap, Sparkles, Clock, Moon, Sun, ChevronLeft, ChevronRight, FileCode2 } from 'lucide-react';
 
 const navItems = [
+  { id: 'products', label: 'Products', icon: FileCode2 },
   { id: 'static', label: 'Static Analysis', icon: Zap },
   { id: 'code', label: 'Code Security', icon: FileCode2 },
   { id: 'iac', label: 'IaC Analysis', icon: Shield },

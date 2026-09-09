@@ -14,6 +14,14 @@ class AnalysisWorkers:
         self.limit = max(1, limit)
         self._slots = threading.BoundedSemaphore(self.limit)
 
+    def run_sync(self, work):
+        if not self._slots.acquire(blocking=False):
+            raise AnalysisBusy('Analysis capacity is busy.')
+        try:
+            return work()
+        finally:
+            self._slots.release()
+
     async def run(self, work, timeout=None):
         if not self._slots.acquire(blocking=False):
             raise AnalysisBusy("Analysis capacity is busy. Retry after the current analyses finish.")

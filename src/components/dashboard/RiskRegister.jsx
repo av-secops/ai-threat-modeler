@@ -347,7 +347,7 @@ function RiskDetailContent({ threat, reviewState, onReviewStateChange }) {
         <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-y border-brand-200 py-3 dark:border-brand-700">
             <span className="text-xs text-brand-600 dark:text-brand-300">{(explanation.evidence_basis || threat.tier || 'unspecified').replaceAll('_', ' ')} / Confidence: {threat.confidence || 'Unspecified'}</span>
             <label className="flex items-center gap-2 text-xs text-brand-600 dark:text-brand-300">Review
-                <select aria-label="Finding review status" className="input-brand text-sm" value={reviewState} onChange={(event) => onReviewStateChange(threat.id, event.target.value)}>
+                <select disabled={!onReviewStateChange} aria-label="Finding review status" className="input-brand text-sm" value={reviewState} onChange={(event) => onReviewStateChange?.(threat.id, event.target.value)}>
                     {Object.entries(reviewStateMeta).map(([key, meta]) => <option value={key} key={key}>{meta.label}</option>)}
                 </select>
             </label>
@@ -364,6 +364,7 @@ function RiskDetailContent({ threat, reviewState, onReviewStateChange }) {
                 <section><h3 className="mb-1 font-semibold text-brand-950 dark:text-white">Verification status</h3><p>Based on submitted evidence. Exploitability has not been verified against a live deployment.</p></section>
             </>}
             {tab === 'evidence' && <>
+                {explanation.evidence_validation && <section className="border-b border-brand-200 pb-3 dark:border-brand-700"><h3 className="font-semibold">Evidence compatibility: {explanation.evidence_validation.status.replaceAll('_', ' ')}</h3>{explanation.evidence_validation.reasons.map(reason => <p key={reason}>{reason}</p>)}<p className="text-xs">Not runtime verified.</p></section>}
                 <EvidenceSources threat={threat} />
                 {(threat.evidence_details || []).map((item, index) => <section key={index} className="border-l-2 border-brand-200 pl-4 dark:border-brand-600">
                     <p className="break-words">{item.statement}</p><p className="mt-1 break-words text-xs text-brand-500 dark:text-brand-300">{[item.document, item.locator, item.line ? `Line ${item.line}` : null, item.source_type?.replaceAll('_', ' ')].filter(Boolean).join(' / ')}</p>

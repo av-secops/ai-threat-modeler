@@ -48,6 +48,8 @@ ENGINE_EVALUABLE_FIELDS = {
     "trust_boundary_crossing", "type", "user_html_input", "webhook_signature_validation",
 }
 ENGINE_EVALUABLE_FIELDS |= set(CONTROL_TERMS)
+from ..engine.literal_security import FIELDS as LITERAL_SECURITY_FIELDS
+ENGINE_EVALUABLE_FIELDS |= set(LITERAL_SECURITY_FIELDS)
 ENGINE_EVALUABLE_FIELDS |= {alias for alias, canonical in CONTROL_ALIASES.items() if canonical in ENGINE_EVALUABLE_FIELDS}
 
 EXCLUDED_KB_FILES = {

@@ -9,7 +9,7 @@ import { useStreamingAnalysis } from './hooks/useStreamingAnalysis';
 import { useAutomaticModelPreview } from './hooks/useAutomaticModelPreview';
 import { saveAnalysis } from './utils/storage';
 import { mapAnalysisResult } from './utils/analysisMapper';
-import { RotateCcw, Zap, Sparkles, Clock, FileCode2, Pencil, Download } from 'lucide-react';
+import { RotateCcw, Zap, Sparkles, Clock, FileCode2, Pencil, Download, ArrowLeft, Plus } from 'lucide-react';
 import { useToast } from './hooks/useToast';
 
 const IacInput = lazy(() => import('./components/IacInput'));
@@ -18,12 +18,17 @@ const ThreatDashboard = lazy(() => import('./components/ThreatDashboard'));
 const AIAnalysis = lazy(() => import('./components/AIAnalysis'));
 const AnalysisHistory = lazy(() => import('./components/AnalysisHistory'));
 const ModelReviewWorkspace = lazy(() => import('./components/ModelReviewWorkspace'));
+const ProductsWorkspace = lazy(() => import('./components/ProductsWorkspace'));
 
 function App() {
   const [data, setData] = useState(null);
   const [projectName, setProjectName] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [activeTab, setActiveTab] = useState('static');
+  const [activeTab, setActiveTab] = useState('products');
+  const [productScope, setProductScope] = useState(null);
+  const [productLocation, setProductLocation] = useState(null);
+  const [isNavigating, setIsNavigating] = useState(false);
+  const navigationPending = useRef(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
   const [workspace, setWorkspace] = useState(null);
   const [reviewing, setReviewing] = useState(false);
@@ -31,13 +36,16 @@ function App() {
   const [reviewTab, setReviewTab] = useState('architecture');
   const [suggestion, setSuggestion] = useState('');
   const [saveStatus, setSaveStatus] = useState('');
+  const [saveConflict, setSaveConflict] = useState(null);
   const saveTimer = useRef(null);
   const [darkMode, setDarkMode] = useState(() => {
     return localStorage.getItem('theme') === 'dark';
   });
   const toast = useToast();
   const streaming = useStreamingAnalysis();
-  const livePreview = useAutomaticModelPreview(workspace, reviewing && activeTab !== 'history' && !isAnalyzing, setWorkspace);
+  const livePreview = useAutomaticModelPreview(workspace, reviewing && !['history', 'products'].includes(activeTab) && !isAnalyzing && !isNavigating && !workspace?.readOnly, setWorkspace);
+
+  useEffect(() => { window.scrollTo(0, 0); }, [activeTab, reviewing, workspace?.id]);
 
   useEffect(() => {
     if (darkMode) {
@@ -49,19 +57,42 @@ function App() {
   }, [darkMode]);
 
   useEffect(() => {
-    if (!workspace) return undefined;
+    if (!workspace || workspace.readOnly || saveConflict === workspace.id) return undefined;
     saveTimer.current = setTimeout(() => {
-      saveWorkspace(workspace).then(() => setSaveStatus('Draft saved locally')).catch(() => setSaveStatus('Draft not saved. Export a backup before leaving.'));
+      saveWorkspace(workspace).then(() => setSaveStatus(workspace.server ? 'Saved to product workspace' : 'Draft saved locally')).catch((error) => {
+        setSaveStatus(`Not synced: ${error.message}`);
+        if (error.status === 409) setSaveConflict(workspace.id);
+      });
     }, 600);
     return () => clearTimeout(saveTimer.current);
-  }, [workspace]);
+  }, [workspace, saveConflict]);
 
   const persistWorkspace = async (next) => {
     clearTimeout(saveTimer.current);
-    await saveWorkspace(next);
-    setWorkspace(next);
-    setSaveStatus('Draft saved locally');
+    const scoped = next.server || !productScope ? next : { ...next, productScope, server: { ...productScope, version: 0 } };
+    let saved;
+    try {
+      saved = await saveWorkspace(scoped);
+    } catch (error) {
+      setSaveStatus(`Not synced: ${error.message}`);
+      if (error.status === 409) {
+        setWorkspace(scoped);
+        setSaveConflict(scoped.id);
+      }
+      throw error;
+    }
+    setWorkspace(saved);
+    setSaveStatus(saved.server ? 'Saved to product workspace' : 'Draft saved locally');
   };
+
+  useEffect(() => {
+    const listener = event => {
+      if (!workspace?.server || workspace.readOnly || !event.detail.key.startsWith(`workspace:${workspace.id}:revision:`)) return;
+      setWorkspace(current => ({ ...current, reviewAnnotations: { ...current.reviewAnnotations, [event.detail.key]: event.detail.annotations } }));
+    };
+    window.addEventListener('aegis-review-saved', listener);
+    return () => window.removeEventListener('aegis-review-saved', listener);
+  }, [workspace]);
 
   const handleAnalyze = async (description, name, useLocalSlm = true, options = {}) => {
     setProjectName(name);
@@ -71,7 +102,8 @@ function App() {
       if (description.trim()) sources.unshift({ id: crypto.randomUUID(), name: 'Architecture notes', text: description,
         kind: 'text', included: true, environment: 'unspecified', version: '', metadata: {} });
       const next = newWorkspace(name, { project_name: name, sources, baseline: null, edits: [], answers: [],
-        use_local_slm: useLocalSlm, analysis_mode: useLocalSlm ? 'standard' : 'fast', domain_profile: options.domainProfile || 'general' });
+        use_local_slm: useLocalSlm, analysis_mode: useLocalSlm ? 'standard' : 'fast', domain_profile: options.domainProfile || 'general',
+        environment: productScope?.environment || '', deployment_version: productScope?.release_name || '' });
       // Save sources before preparation so a failed parse can be corrected in place.
       await persistWorkspace(next);
       setData(null);
@@ -88,13 +120,22 @@ function App() {
   };
 
   const runReviewedAnalysis = async () => {
+    if (workspace?.readOnly) return;
     if (!workspace?.draft.preview || workspace.draft.preparedSignature !== draftSignature(workspace.draft.payload)) return;
     setIsAnalyzing(true);
     try {
-      const result = await analyzeReviewedModel(workspace.draft.payload);
+      const signature = draftSignature(workspace.draft.payload);
+      const result = await analyzeReviewedModel(workspace.draft.payload, {
+        jobId: workspace.activeJob?.signature === signature ? workspace.activeJob.id : undefined,
+        onJob: id => {
+          const next = { ...workspace, activeJob: { id, signature } };
+          setWorkspace(next);
+          return persistWorkspace(next);
+        },
+      });
       const previous = workspace.revisions.at(-1);
       const annotations = loadAnnotations(previous ? annotationKey(workspace.id, previous.number) : '');
-      const next = commitRevision(workspace, result, annotations);
+      const next = commitRevision({ ...workspace, activeJob: null }, result, annotations);
       await persistWorkspace(next);
       const revision = next.revisions.at(-1);
       saveAnnotations(annotationKey(next.id, revision.number), revision.annotations);
@@ -138,7 +179,7 @@ function App() {
   };
 
   const openModelReview = async (tab = 'architecture', proposedText = '') => {
-    if (isAnalyzing) return;
+    if (isAnalyzing || workspace?.readOnly) return;
     setReviewTab(tab);
     setSuggestion(proposedText);
     if (workspace) { setReviewing(true); return; }
@@ -175,12 +216,17 @@ function App() {
   };
 
   const saveDraft = async () => {
+    if (workspace?.readOnly) return;
     try {
       await saveWorkspace(workspace);
       // Saving a snapshot must not replace edits or a preview received meanwhile.
-      setSaveStatus('Draft saved locally');
+      setSaveStatus(workspace.server ? 'Saved to product workspace' : 'Draft saved locally');
     }
-    catch { setSaveStatus('Draft not saved. Export a backup before leaving.'); toast.error('Browser storage is unavailable or full. Export your workspace before leaving.'); }
+    catch (error) {
+      setSaveStatus(`Not synced: ${error.message}`);
+      if (error.status === 409) setSaveConflict(workspace.id);
+      toast.error(error.message, 'Draft could not be synced');
+    }
   };
 
   const loadRevision = (number) => {
@@ -251,6 +297,7 @@ function App() {
         const saved = await loadWorkspace(record.workspaceId);
         if (!saved) throw new Error('Saved workspace was not found.');
         setWorkspace(saved);
+        setProductScope(saved.productScope || null);
         const revision = saved.revisions.at(-1);
         setSelectedRevision(revision?.number || null);
         setData(revision?.data || null);
@@ -263,6 +310,7 @@ function App() {
       } catch (error) { toast.error(error.message); return; }
     }
     setWorkspace(null);
+    setProductScope(null);
     setReviewing(false);
     setData(analysisData);
     setProjectName(name);
@@ -277,17 +325,85 @@ function App() {
     handleAnalyze(architectureDocument, projectName || 'Untitled', true);
   };
 
-  const handleNewAnalysis = () => {
-    if (workspace) saveWorkspace(workspace).catch(() => toast.error('Draft could not be saved.'));
+  const resetAnalysis = () => {
     setWorkspace(null);
     setReviewing(false);
     setSelectedRevision(null);
     setData(null);
     setProjectName('');
+    setSaveConflict(null);
+    setSaveStatus('');
+    setSuggestion('');
+  };
+
+  const leaveAnalysis = async (navigate) => {
+    if (isAnalyzing || navigationPending.current) return;
+    navigationPending.current = true;
+    setIsNavigating(true);
+    clearTimeout(saveTimer.current);
+    try {
+      if (workspace && !workspace.readOnly) {
+        if (saveConflict === workspace.id) throw new Error('Resolve the shared draft conflict before leaving.');
+        await saveWorkspace(workspace);
+      }
+      navigate();
+    } catch (error) {
+      setSaveStatus(`Not synced: ${error.message}`);
+      if (error.status === 409) setSaveConflict(workspace.id);
+      toast.error(error.message, 'Your draft is still open');
+    } finally {
+      navigationPending.current = false;
+      setIsNavigating(false);
+    }
+  };
+
+  const handleNewAnalysis = () => leaveAnalysis(() => { resetAnalysis(); });
+
+  const returnToRelease = (newModelScope = '') => leaveAnalysis(() => {
+    setProductLocation({ product_id: productScope.product_id, release_id: productScope.release_id, newModelScope });
+    resetAnalysis();
+    setProductScope(null);
+    setActiveTab('products');
+  });
+
+  const startReleaseModel = scope => {
+    resetAnalysis();
+    setProductScope(scope);
+    setProductLocation({ product_id: scope.product_id, release_id: scope.release_id });
+    setActiveTab('static');
   };
 
   // Page titles and icons for the header
+  const openServerWorkspace = (row) => {
+    const scope = row.productScope || row.workspace.productScope || null;
+    const saved = { ...row.workspace, productScope: scope, readOnly: row.readOnly, server: { release_id: row.release_id,
+      application_id: row.application_id, environment: row.environment, version: row.version } };
+    const revision = saved.revisions.at(-1);
+    for (const [key, value] of Object.entries(saved.reviewAnnotations || {})) saveAnnotations(key, value);
+    setWorkspace(saved); setProductScope(scope); setProjectName(saved.projectName);
+    setData(revision?.data || null); setSelectedRevision(revision?.number || null);
+    setReviewing(!revision); setActiveTab('static');
+    setReviewTab('architecture'); setSuggestion('');
+    setSaveConflict(null);
+  };
+
+  const recoverWorkspace = async () => {
+    setIsAnalyzing(true);
+    clearTimeout(saveTimer.current);
+    try {
+      const { enterprise } = await import('./services/enterprise');
+      const row = await enterprise(`/workspaces/${workspace.id}`);
+      exportWorkspace();
+      openServerWorkspace({ ...row, productScope, readOnly: workspace.readOnly });
+    } catch (error) {
+      toast.error(error.message, 'Could not reload workspace');
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
   const pageInfo = {
+    products: { title: 'Products', subtitle: 'Applications, releases and threat models', icon: FileCode2, color: 'text-brand-primary' },
     static: { title: 'Static Analysis', subtitle: 'Rule-based + NLP + Semantic threat detection', icon: Zap, color: 'text-brand-primary' },
     code: { title: 'Code Security', subtitle: 'Evidence-backed checks for common source vulnerabilities', icon: FileCode2, color: 'text-brand-primary' },
     iac: { title: 'Infrastructure-as-Code', subtitle: 'Analyze cloud, container, pipeline, and multi-file IaC projects', icon: Zap, color: 'text-brand-success' },
@@ -298,9 +414,10 @@ function App() {
   const currentPage = pageInfo[activeTab];
   const PageIcon = currentPage.icon;
   const reviewProps = {
-    onReviewModel: () => openModelReview(),
-    onClarify: () => openModelReview('questions'),
-    onProposeUpdate: (text) => openModelReview('sources', text),
+    onReviewModel: workspace?.readOnly ? undefined : () => openModelReview(),
+    onClarify: workspace?.readOnly ? undefined : () => openModelReview('questions'),
+    onProposeUpdate: workspace?.readOnly ? undefined : (text) => openModelReview('sources', text),
+    readOnly: !!workspace?.readOnly,
     annotationScope: workspace && selectedRevision ? annotationKey(workspace.id, selectedRevision) : undefined,
   };
 
@@ -309,7 +426,12 @@ function App() {
       {/* Sidebar */}
       <Sidebar
         activeTab={activeTab}
-        onTabChange={setActiveTab}
+        onTabChange={tab => {
+          if (isAnalyzing || isNavigating) return;
+          if (tab === 'products' && activeTab !== 'products') {
+            leaveAnalysis(() => { resetAnalysis(); setProductScope(null); setActiveTab(tab); });
+          } else setActiveTab(tab);
+        }}
         darkMode={darkMode}
         onToggleDarkMode={() => setDarkMode(!darkMode)}
         collapsed={sidebarCollapsed}
@@ -331,10 +453,10 @@ function App() {
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-2 sm:gap-3">
-              {(data || workspace) && (
+              {(data || workspace) && !productScope && !['products', 'history'].includes(activeTab) && (
                 <button
                   onClick={handleNewAnalysis}
-                  disabled={isAnalyzing}
+                  disabled={isAnalyzing || isNavigating}
                   className="ui-button-secondary h-9 px-2 sm:px-3.5"
                   title="Start a new analysis"
                 >
@@ -343,7 +465,7 @@ function App() {
                 </button>
               )}
               <div className="ui-chip hidden font-mono sm:inline-flex">
-                v2.3.1
+                v2.3.2
               </div>
             </div>
           </div>
@@ -352,11 +474,25 @@ function App() {
         {/* Page Content */}
         <main className="mx-auto max-w-[1440px] px-3 py-5 sm:px-8 sm:py-7">
           <Suspense fallback={<div className="panel-soft px-6 py-14 text-center text-sm text-brand-500 dark:text-brand-400">Loading analysis workspace...</div>}>
-          {workspace && activeTab !== 'history' && <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-brand-200 pb-3 dark:border-brand-700">
-            <div className="flex flex-wrap items-center gap-3 text-sm">{workspace.revisions.length > 0 && <label className="flex items-center gap-2">Report revision<select aria-label="Report revision" disabled={isAnalyzing} className="input-brand text-sm" value={selectedRevision || workspace.revisions.at(-1).number} onChange={(e) => loadRevision(Number(e.target.value))}>{workspace.revisions.map((r) => <option key={r.number} value={r.number}>Revision {r.number}{r.number === workspace.revisions.at(-1).number ? ' (latest)' : ''}</option>)}</select></label>}<span className="text-xs text-brand-500 dark:text-brand-400">{reviewing ? 'Draft' : selectedRevision === workspace.revisions.at(-1)?.number ? 'Latest report' : 'Historical report'}</span></div>
-            <div className="flex gap-2">{!reviewing && <button type="button" className="ui-button-secondary" disabled={isAnalyzing} onClick={() => openModelReview()}><Pencil size={16} />Update this model</button>}<button type="button" className="ui-button-secondary" onClick={exportWorkspace}><Download size={16} />Export workspace</button></div>
+          {productScope?.product_id && !['products', 'history'].includes(activeTab) && <nav aria-label="Release navigation" className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <button type="button" className="ui-button-secondary" disabled={isAnalyzing || isNavigating} onClick={() => returnToRelease()}><ArrowLeft size={16} />Back to release</button>
+            {data && !reviewing && !workspace?.readOnly && <button type="button" className="btn-brand gap-2" disabled={isAnalyzing || isNavigating} onClick={() => returnToRelease('application')}><Plus size={16} />Add another application</button>}
+          </nav>}
+          {workspace?.activeJob && activeTab !== 'products' && !isAnalyzing && <div className="mb-3 flex flex-wrap items-center gap-3 text-sm"><span>Saved analysis job</span><button className="ui-button-secondary" onClick={runReviewedAnalysis} disabled={!!workspace.readOnly}>Resume analysis</button></div>}
+          {productScope && !['products', 'history'].includes(activeTab) && <div className="mb-4 flex flex-wrap gap-x-4 gap-y-2 border-b border-brand-200 pb-3 text-sm dark:border-brand-700">
+            <span className="font-semibold">{productScope.product_name} / {productScope.release_name}</span>
+            <span>{productScope.application_id ? `Ad hoc application: ${productScope.application_name}` : 'Complete release product'}</span>
+            <span>{productScope.environment}</span>
           </div>}
-          {workspace && reviewing && activeTab !== 'history' ? <ModelReviewWorkspace key={`${workspace.id}-${reviewTab}-${suggestion}`} workspace={workspace} onChange={(next) => { setWorkspace(next); setSaveStatus('Unsaved draft changes'); }} onPrepare={livePreview.retry} previewUpdating={livePreview.updating} previewError={livePreview.error} onAnalyze={runReviewedAnalysis} onUpload={uploadReviewSources} onSave={saveDraft} onBack={() => workspace.revisions.length ? loadRevision(workspace.revisions.at(-1).number) : handleNewAnalysis()} busy={isAnalyzing} saveStatus={saveStatus} darkMode={darkMode} initialTab={reviewTab} suggestion={suggestion} /> : activeTab === 'static' ? (
+          {workspace && !['history', 'products'].includes(activeTab) && <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-brand-200 pb-3 dark:border-brand-700">
+            <div className="flex flex-wrap items-center gap-3 text-sm">{workspace.revisions.length > 0 && <label className="flex items-center gap-2">Report revision<select aria-label="Report revision" disabled={isAnalyzing} className="input-brand text-sm" value={selectedRevision || workspace.revisions.at(-1).number} onChange={(e) => loadRevision(Number(e.target.value))}>{workspace.revisions.map((r) => <option key={r.number} value={r.number}>Revision {r.number}{r.number === workspace.revisions.at(-1).number ? ' (latest)' : ''}</option>)}</select></label>}<span className="text-xs text-brand-500 dark:text-brand-400">{reviewing ? 'Draft' : selectedRevision === workspace.revisions.at(-1)?.number ? 'Latest report' : 'Historical report'}</span></div>
+            <div className="flex gap-2">{!reviewing && !workspace.readOnly && <button type="button" className="ui-button-secondary" disabled={isAnalyzing} onClick={() => openModelReview()}><Pencil size={16} />Update this model</button>}<button type="button" className="ui-button-secondary" onClick={exportWorkspace}><Download size={16} />Export workspace</button></div>
+            </div>}
+          {workspace && saveConflict === workspace.id && <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-3 border border-amber-500 p-3 text-sm">
+            <p>This shared draft changed elsewhere. Your local copy is preserved; server sync is paused.</p>
+            <button type="button" className="ui-button-secondary" disabled={isAnalyzing} onClick={recoverWorkspace}><RotateCcw size={16} />Export draft and reload latest</button>
+          </div>}
+          {activeTab === 'products' ? <ProductsWorkspace darkMode={darkMode} initialLocation={productLocation} onLocationChange={setProductLocation} onOpen={openServerWorkspace} onHistory={() => { setProductScope(null); setActiveTab('history'); }} onStart={startReleaseModel} /> : workspace && reviewing && activeTab !== 'history' ? <ModelReviewWorkspace key={`${workspace.id}-${reviewTab}-${suggestion}`} workspace={workspace} onChange={(next) => { setWorkspace(next); setSaveStatus('Unsaved draft changes'); }} onPrepare={livePreview.retry} previewUpdating={livePreview.updating} previewError={livePreview.error} onAnalyze={runReviewedAnalysis} onUpload={uploadReviewSources} onSave={saveDraft} onBack={workspace.revisions.length ? () => loadRevision(workspace.revisions.at(-1).number) : productScope?.product_id ? undefined : handleNewAnalysis} busy={isAnalyzing || isNavigating} saveStatus={saveStatus} darkMode={darkMode} initialTab={reviewTab} suggestion={suggestion} /> : activeTab === 'static' ? (
             <>
               {!data && <ThreatInput onAnalyze={handleAnalyze} isAnalyzing={isAnalyzing || streaming.isAnalyzing} />}
 
@@ -486,7 +622,7 @@ function App() {
 
         {/* Footer */}
         <footer className="mt-auto border-t border-brand-200 py-4 text-center text-xs text-brand-400 dark:border-brand-700 dark:text-brand-500">
-          <p>&copy; 2026 AITM v2.3.1 • NLP &bull; Semantic Search &bull; Attack Chains &bull; Multi-LLM</p>
+          <p>&copy; 2026 AITM v2.3.2 • NLP &bull; Semantic Search &bull; Attack Chains &bull; Multi-LLM</p>
         </footer>
       </div>
     </div>

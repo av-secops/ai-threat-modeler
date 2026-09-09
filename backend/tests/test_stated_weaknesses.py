@@ -3,6 +3,7 @@ the component the sentence is about."""
 
 from app.engine.analyzer import ThreatAnalyzer
 from app.engine.parser import ArchitectureParser
+from app.models import Threat
 
 
 DESCRIPTION = (
@@ -41,6 +42,38 @@ def test_a_control_that_is_present_is_not_recorded_as_a_weakness():
     # "calls a payments service over HTTPS" states a control, not a weakness.
     for component_id, rule_ids in stated.items():
         assert 'GENERIC-ENCRYPTION-IN-TRANSIT-001' not in rule_ids, component_id
+
+
+def test_input_validation_is_one_gap_not_proof_of_ssrf_or_privilege_escalation():
+    result = ThreatAnalyzer().analyze_from_text(
+        'React calls a Node.js REST API over HTTPS. '
+        'The Node.js REST API writes orders to PostgreSQL over TLS.\n'
+        'Known issues:\n- Node.js REST API has no input validation.',
+        use_local_slm=False,
+    )
+    findings = [t for t in result.threats if 'input_validation' in
+                (t.explanation or {}).get('matched_controls', []) and t.component == 'node_js']
+    assert len(findings) == 1
+    assert findings[0].tier == 'Confirmed'
+    assert findings[0].cwe == ['CWE-20']
+    assert not any(t.tier == 'Confirmed' and {'CWE-918', 'CWE-269'} & set(t.cwe) for t in result.threats)
+    issues = result.engine_status['issue_inventory']
+    assert issues['reported'] == 1
+    assert issues['issues'][0]['finding_ids'] == [findings[0].id]
+
+
+def test_control_deduplication_preserves_distinct_weaknesses_and_flow_scopes():
+    def finding(identifier, cwe, category='Tampering', flow=None):
+        return Threat(id=identifier, title=identifier, description=identifier,
+            severity='High', mitigation='Validate the specific boundary.', category=category,
+            tier='Confirmed', component='api', affected_components=['api'], data_flow=flow,
+            cwe=[cwe], explanation={'matched_controls': ['input_validation']})
+    findings = [finding('GENERIC-input', 'CWE-20'), finding('KB-input', 'CWE-20'),
+        finding('KB-ssrf', 'CWE-918'), finding('KB-privilege', 'CWE-269', 'Elevation of Privilege'),
+        finding('KB-other-flow', 'CWE-20', flow='api->db')]
+    result = ThreatAnalyzer._collapse_findings_on_the_same_control(findings)
+    assert {t.id for t in result} == {'KB-input', 'KB-ssrf', 'KB-privilege', 'KB-other-flow'}
+    assert next(t for t in result if t.id == 'KB-input').cwe == ['CWE-20']
 
 
 def test_weakness_named_with_two_components_goes_to_the_subject():

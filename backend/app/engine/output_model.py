@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 from typing import Any, Dict, List
+from .control_contracts import boundary_dimensions, presence
 
 
 FINDING_TYPES = ("architecture", "code", "iac", "control_gap", "validation_question")
@@ -24,7 +25,7 @@ def build_system_model(architecture) -> Dict[str, Any]:
             "name": component.name,
             "type": component.type,
             "trust_level": component.trust_level,
-            "public_access": bool(props.get("public_access")) or component.trust_level in {"public", "external"},
+            "public_access": presence(props.get("public_access")) is True or component.trust_level == "public",
             "authentication": props.get("auth_type") if props.get("auth_type") not in {None, "", "unknown"} else "unspecified",
             "authorization": _authorization_model(props),
             "data_sensitivity": props.get("data_sensitivity") or "unspecified",
@@ -59,7 +60,7 @@ def build_system_model(architecture) -> Dict[str, Any]:
             "protocol": flow.protocol,
             "data_type": flow.data_type,
             "explicit": not flow.assumed,
-            "crosses_trust_boundary": bool(source and target and source.trust_level != target.trust_level),
+            "crosses_trust_boundary": bool(source and target and boundary_dimensions(source, target)),
         }
         flows.append(item)
         if item["crosses_trust_boundary"]:

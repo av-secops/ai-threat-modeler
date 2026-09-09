@@ -440,13 +440,8 @@
         ],
         "detection": {
             "logic": {
-                "operator": "OR",
+                "operator": "AND",
                 "conditions": [
-                    {
-                        "field": "input_validation",
-                        "op": "==",
-                        "value": false
-                    },
                     {
                         "field": "ssrf_protection",
                         "op": "==",

@@ -189,4 +189,7 @@ KNOWN ISSUES:
 
     for label in ("React", "Rest Api", "HL7 FHIR API", "Postgresql", "REDIS", "Azure Blob", "Azure Ad"):
         assert label in result.mermaid_diagram
-    assert 'Third-Party Trust Boundary' in result.mermaid_diagram
+    for boundary in result.architecture.trust_boundaries:
+        if boundary.components:
+            assert boundary.name in result.mermaid_diagram
+    assert result.engine_status['diagram_coverage']['flows_in_model'] == len(result.architecture.flows)

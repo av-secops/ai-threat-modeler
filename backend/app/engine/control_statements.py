@@ -320,6 +320,8 @@ def statements(text: str) -> List[ControlStatement]:
     """Every control claim in the text, with the clause that carries it."""
     found: List[ControlStatement] = []
     for clause in _clauses(text):
+        if non_assertion(clause):
+            continue
         for control, terms in DENIAL_TERMS.items():
             if any(_term_pattern(term).search(clause) for term in terms):
                 found.append(ControlStatement(control, False, clause.strip()))
@@ -332,6 +334,12 @@ def statements(text: str) -> List[ControlStatement]:
                     )
                     found.append(ControlStatement(control, not denied, clause.strip()))
     return found
+
+
+def non_assertion(clause: str) -> bool:
+    """A comparison of controls does not claim their deployment state."""
+    return bool(re.search(r'\b(?:does? not|cannot|can not|neither|not a (?:complete )?substitute)\b.*\b(?:prove|proves|guarantee|guarantees|substitute|replace|replacement)\b', clause, re.I)
+        or re.search(r'\bnot a (?:complete )?substitute\b', clause, re.I))
 
 
 @lru_cache(maxsize=1024)

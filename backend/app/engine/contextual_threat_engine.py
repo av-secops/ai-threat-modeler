@@ -125,6 +125,7 @@ THREAT_LIBRARY = {
     },
     "missing_input_validation": {
         "id": "CTX-API-004",
+        "controls": ["input_validation"],
         "category": "Tampering",
         "title": "Missing input validation on request handling path",
         "description": "The design identifies request handling without clear validation or sanitization controls.",

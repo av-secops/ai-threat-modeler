@@ -1,8 +1,22 @@
-# Aegis Threat 2.3.1
+# Aegis Threat 2.3.2
 
 Aegis Threat is a local React and FastAPI application for building technical threat models from architecture descriptions and uploaded design documents. It combines deterministic security rules, STRIDE coverage, local semantic search, optional LLM review, attack-path analysis, compliance mappings, and report exports.
 
 The deterministic engine remains the source of published findings. Semantic models and optional LLMs rank candidates, identify gaps, and raise review questions; they do not silently create confirmed risks.
+
+## What's new in 2.3.2
+
+The home screen now opens your product catalog. Open a product, select a release,
+then choose a complete-product model or an ad hoc application. One release can
+contain several application models, each with its own draft and report revisions.
+Use **Add threat model** on the release page or **Add another application** from a
+report. **Back to release** saves a prepared draft before returning to its list;
+if saving fails, the draft stays open. Existing reports are not replaced.
+
+This update also adds source-issue tracking, evidence checks before findings are
+published as confirmed, business-workflow controls, clearer assurance views and
+durable local analysis jobs. See the [release notes](docs/releases/v2.3.2.md) for
+details and the limits of these checks.
 
 ## What it does
 
@@ -14,6 +28,8 @@ The deterministic engine remains the source of published findings. Semantic mode
 - Supports SaaS, fintech, healthcare, AI, platform, and general domain profiles.
 - Includes an analyst workbench for notes, triage, ownership, action-register export, and local analysis assistance.
 - Exports Markdown, JSON, CSV, PNG, and PDF reports.
+- Organizes server-saved threat models by product and release, with separate application models, unique names, draft recovery and revision comparison.
+- Tracks declared issues back to source evidence, checks explicit business-workflow controls and preserves uncertainty in cloud-policy evaluation.
 
 The report has separate overview, architecture, risk register and assurance
 views. Findings can be searched and filtered by evidence, severity, STRIDE and
@@ -26,7 +42,9 @@ model. You can leave unknowns open and return to them later.
 
 Use **Update this model** to add context, replace a file or correct a connection.
 Each successful analysis saves a new report revision. History also restores
-unfinished drafts. Sources are kept as extracted text in this browser; use
+unfinished drafts. Unassigned sources remain in this browser; product workspaces
+also save extracted text and immutable reports on the server. See
+[product workspaces](docs/product-workspaces.md) for storage and role setup. Use
 **Export workspace** for a JSON archive. Details are in
 [the guided review notes](docs/guided-model-review.md).
 
@@ -129,7 +147,7 @@ you having to repeat it. Each component records whether its classification was
 
 Unspecified controls should remain questions or clearly labelled potential risks,
 not confirmed vulnerabilities. Extraction and interpretation still need review;
-the known limitations below describe failures observed in a complex scenario.
+the limitations below explain what an automated review can and cannot establish.
 The gaps report names components whose connections were guessed, and the evidence
 requests list every unresolved control.
 
@@ -473,6 +491,7 @@ npm run test:all  # the whole backend suite
 npm run lint      # frontend
 npm run build     # production frontend bundle
 node --test scripts/model-workspace.test.mjs
+node --test scripts/release-presentation.test.mjs scripts/release-navigation.test.mjs
 node --test scripts/startup.test.mjs
 ```
 
@@ -538,13 +557,20 @@ Findings from the pages that were read are still published.
 
 The dashboard supports finding states such as open, mitigated, accepted, and false positive. Mermaid labels and IDs are sanitized before rendering, and frontend response normalization is handled in [`src/utils/analysisMapper.js`](src/utils/analysisMapper.js).
 
-### Known Limitations in This 2.3.1 Update
+### Known limitations
 
 Treat this release as an assisted review tool, not a security sign-off engine.
 "Confirmed" means the engine found supporting input evidence, not that the
 deployment was tested. "100% STRIDE assessed" is not complete threat coverage;
-check evidence resolution and the original documents as well. Product/release
-hierarchy management remains a [saved workplan](docs/product-release-workplan.md).
+check evidence resolution and the original documents as well.
+
+Product workspaces use local SQLite storage and installation-wide roles, not
+per-product tenant isolation or enterprise SSO. Protect and back up the database;
+it stores extracted source text and is not encrypted by this application. Cloud
+policy reasoning handles a bounded AWS IAM subset, not live permission testing.
+Synthetic tests check implementation behavior, not independent production
+accuracy. See [product workspaces](docs/product-workspaces.md) and
+[implementation boundaries](docs/reliability-implementation.md).
 
 ## License
 

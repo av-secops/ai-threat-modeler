@@ -569,6 +569,15 @@ export const generateReport = async (data, projectName, reviewStates = {}) => {
         drawThreatSection('Potential Risks', potential, COLORS.warning);
         if (excluded.length) drawThreatSection('Reviewer Exclusions', excluded, COLORS.muted);
         drawEvidenceRequests();
+        const inventory = data.engine_status?.issue_inventory;
+        if (inventory?.declared) {
+            drawSectionTitle('Source Issue Accountability');
+            writeText(`${inventory.reported} reported, ${inventory.out_of_scope || 0} outside scope, ${inventory.unaccounted} needing review.`, { size: 9, color: COLORS.ink });
+            for (const issue of inventory.issues) {
+                writeText(`${issue.status.replaceAll('_', ' ')}: ${issue.statement}`, { size: 9, color: COLORS.ink });
+                writeText(`${issue.document || 'Submitted source'}${issue.line ? `, line ${issue.line}` : ''}. ${issue.reason}`, { size: 8, color: COLORS.muted });
+            }
+        }
 
         drawFooterOnAllPages();
         doc.save(`${(projectName || 'Aegis_Threat_Report').replace(/\s+/g, '_')}.pdf`);

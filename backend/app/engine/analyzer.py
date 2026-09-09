@@ -270,6 +270,9 @@ class ThreatAnalyzer:
         threats, specialist_diagnostics = self.specialist_orchestrator.analyze(architecture)
         specialist_route = specialist_diagnostics
         kb_diagnostics = specialist_diagnostics["knowledge_diagnostics"]
+        from .workflow_checks import analyze_workflows
+        workflow_threats, workflow_assessments = analyze_workflows(architecture)
+        threats.extend(workflow_threats)
         reporter.phase("declared_issues", {"findings": len(threats)})
         threats = self._process_known_issues(architecture, threats)
         threats = self._process_stated_weaknesses(architecture, threats)
@@ -297,6 +300,8 @@ class ThreatAnalyzer:
         threats, confidence_diagnostics = self.confidence_calibrator.calibrate(threats, architecture)
         threats = self._apply_risk_model(threats, architecture)
         threats = self._classify_tiers(threats)
+        from .finding_assurance import validate_evidence
+        threats = validate_evidence(threats, architecture)
         threats = self._suppress_potentials_superseded_by_known_issues(threats)
         threats = self._collapse_findings_on_the_same_control(threats)
         _, stride_coverage = self.stride_coverage_engine.assess(
@@ -319,8 +324,10 @@ class ThreatAnalyzer:
         reporter.phase("scoring")
         score = self._calculate_score(threats)
         reporter.phase("reporting")
-        diagram = generate_mermaid(graph, threats=threats, enhanced=True)
-        diagram_stats = diagram_coverage(graph, threats)
+        from .canonical_diagram import diagram_views
+        views = diagram_views(architecture, threats)
+        diagram = views[0]['diagram']
+        diagram_stats = views[0]['coverage']
 
         confirmed = [threat for threat in threats if threat.tier == "Confirmed"]
         potential = [threat for threat in threats if threat.tier == "Potential"]
@@ -378,6 +385,8 @@ class ThreatAnalyzer:
                 "unknown_cells": stride_coverage["unknown_cells"],
             },
             "diagram_coverage": diagram_stats,
+            "diagram_views": views,
+            "workflow_assessments": workflow_assessments,
             "evidence_requests": {
                 "status": "active",
                 "requests": len(evidence_requests["requests"]),
@@ -417,6 +426,8 @@ class ThreatAnalyzer:
         result.domain_context = self._build_domain_context(domain_profile, architecture, threats)
         result.ai_security_lens = self._build_ai_security_lens(architecture, threats)
         result.priority_actions = self._build_priority_actions(threats)
+        from .finding_assurance import attach_assurance
+        attach_assurance(result)
         result.report_markdown = self._generate_report_markdown(result)
         result.engine_status["performance"] = reporter.finish()
         return result
@@ -653,7 +664,7 @@ class ThreatAnalyzer:
                 continue
             controls = set((threat.explanation or {}).get("matched_controls") or [])
             if controls:
-                confirmed_claims.append((scope(threat), controls, threat.stride_category or threat.category))
+                confirmed_claims.append((scope(threat), controls, threat.stride_category or threat.category, (threat.cwe or [None])[0]))
 
         filtered = []
         for threat in threats:
@@ -661,7 +672,8 @@ class ThreatAnalyzer:
             controls = set((threat.explanation or {}).get("matched_controls") or [])
             superseded = threat.tier == "Potential" and bool(controls) and any(
                 scope(threat) == known_scope and category == known_category and controls <= known_controls
-                for known_scope, known_controls, known_category in confirmed_claims
+                and bool(threat.cwe) and threat.cwe[0] == known_cwe
+                for known_scope, known_controls, known_category, known_cwe in confirmed_claims
             )
             if not superseded:
                 filtered.append(threat)
@@ -676,7 +688,7 @@ class ThreatAnalyzer:
 
     @classmethod
     def _collapse_findings_on_the_same_control(cls, threats: List[Threat]) -> List[Threat]:
-        """One control absent on one component is one finding.
+        """Merge the same weakness, control and complete scope across producers.
 
         Different passes reach the same conclusion from the same property: a rule
         predicate, a contextual pattern and the plain sentence all report that a
@@ -694,29 +706,37 @@ class ThreatAnalyzer:
                     return rank
             return 0
 
-        claims: Dict[Tuple[str, str], List[Threat]] = {}
+        def scope(threat):
+            return (
+                tuple(sorted(set(filter(None, [threat.component, threat.affected_component,
+                    threat.component_id, *(threat.affected_components or [])])))),
+                tuple(sorted(set(filter(None, [threat.data_flow, threat.related_data_flow,
+                    *(threat.affected_data_flows or [])])))),
+                (threat.stride_category or threat.category),
+                (threat.cwe or [None])[0],
+            )
+
+        claims = {}
         for threat in threats:
             if threat.tier != "Confirmed":
                 continue
             controls = (threat.explanation or {}).get("matched_controls") or []
             component = threat.component or threat.affected_component
             for control in controls:
-                if component:
-                    claims.setdefault((component, control), []).append(threat)
+                if component and threat.cwe:
+                    claims.setdefault((scope(threat), control), []).append(threat)
 
-        signature_claims: Dict[Tuple[str, str, str], List[Threat]] = {}
+        signature_claims = {}
         for threat in threats:
             if threat.tier != "Confirmed":
                 continue
             component = threat.component or threat.affected_component
             signature = cls._root_signature(threat)
             if component and signature:
-                signature_claims.setdefault((
-                    component, threat.stride_category or threat.category, signature,
-                ), []).append(threat)
-        for (component, _, signature), duplicates in signature_claims.items():
+                signature_claims.setdefault((scope(threat), signature), []).append(threat)
+        for (finding_scope, signature), duplicates in signature_claims.items():
             if len(duplicates) > 1:
-                claims[(component, f"root:{signature}")] = duplicates
+                claims[(finding_scope, f"root:{signature}")] = duplicates
 
         superseded: Dict[int, Threat] = {}
         for duplicates in claims.values():
@@ -731,6 +751,8 @@ class ThreatAnalyzer:
             keeper = superseded.get(id(threat))
             if keeper is None:
                 continue
+            while id(keeper) in superseded:
+                keeper = superseded[id(keeper)]
             keeper.cwe = _merge(keeper.cwe, threat.cwe)
             keeper.owasp_top_10 = _merge(keeper.owasp_top_10, threat.owasp_top_10)
             keeper.mitre_attack = _merge(keeper.mitre_attack, threat.mitre_attack)
@@ -782,6 +804,8 @@ class ThreatAnalyzer:
         threats, confidence_diagnostics = self.confidence_calibrator.calibrate(threats, architecture)
         threats = self._apply_risk_model(threats, architecture)
         threats = self._classify_tiers(threats)
+        from .finding_assurance import validate_evidence, attach_assurance
+        threats = validate_evidence(threats, architecture)
         threats = self._suppress_potentials_superseded_by_known_issues(threats)
         threats = self._collapse_findings_on_the_same_control(threats)
         _, stride_coverage = self.stride_coverage_engine.assess(
@@ -790,8 +814,9 @@ class ThreatAnalyzer:
         attack_paths = generate_attack_paths(architecture, threats)
         threats = self._attach_attack_paths(threats, attack_paths)
         result.attack_chains = {"paths": attack_paths, "count": len(attack_paths)}
-        graph = self._get_cached_graph(architecture)
-        result.mermaid_diagram = generate_mermaid(graph, threats=threats, enhanced=True)
+        from .canonical_diagram import diagram_views
+        views = diagram_views(architecture, threats)
+        result.mermaid_diagram = views[0]['diagram']
         result.diagram = result.mermaid_diagram
         threats = self._enrich_threat_explanations(threats, architecture)
         threats = self._cite_evidence_sources(threats, architecture)
@@ -822,7 +847,8 @@ class ThreatAnalyzer:
         result.stride_coverage = stride_coverage
         result.engine_status = {
             **(result.engine_status or {}),
-            "diagram_coverage": diagram_coverage(graph, threats),
+            "diagram_coverage": views[0]['coverage'],
+            "diagram_views": views,
             "local_intelligence": local_diagnostics,
             "disagreements": disagreement_diagnostics,
             "confidence_calibration": confidence_diagnostics,
@@ -851,6 +877,7 @@ class ThreatAnalyzer:
                 "determined_control_ratio", 0.0
             ),
         }
+        attach_assurance(result)
         result.report_markdown = self._generate_report_markdown(result)
         return result
 
@@ -903,8 +930,11 @@ class ThreatAnalyzer:
                 controls = set((threat.explanation or {}).get('matched_controls') or ())
                 if (
                     str(threat.id).startswith(rule['id'])
-                    or rule['cwe'][0] in set(threat.cwe or [])
-                    or bool(properties & controls)
+                    or (
+                        rule['category'] == (threat.stride_category or threat.category)
+                        and rule['cwe'][0] == (threat.cwe or [None])[0]
+                        and (not controls or bool(properties & controls))
+                    )
                 ):
                     return threat
             return None
@@ -1541,7 +1571,7 @@ class ThreatAnalyzer:
                         {key: item.get(key) for key in ("role", "model", "revision", "loaded", "fallback")}
                         for item in local_models.get("models") or []
                     ],
-                    "engine_version": "2.3.1",
+                    "engine_version": "2.3.2",
                 },
             })
             threat.explanation = explanation

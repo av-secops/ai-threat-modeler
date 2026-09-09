@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { ArrowLeft, ArrowRight, Check, Eye, FileText, HelpCircle, LoaderCircle, Network, Plus, RefreshCw, Save, Trash2, Upload } from 'lucide-react';
 import ReviewDiagram from './dashboard/ReviewDiagram';
 import SourceEvidenceDialog from './dashboard/SourceEvidenceDialog';
+import WorkflowEditor from './WorkflowEditor';
 import { draftSignature } from '../utils/modelWorkspace';
 
 const TYPES = ['Service', 'API', 'API Gateway', 'WebClient', 'Identity Provider', 'Database', 'Object Storage', 'Compute', 'Queue', 'ML Service', 'Secrets Manager', 'External Entity'];
@@ -11,7 +12,7 @@ const PROTOCOLS = ['unknown', 'HTTPS', 'TLS', 'mTLS', 'HTTP', 'TCP', 'WSS', 'WS'
 const SOURCE_FORMATS = '.txt,.md,.pdf,.docx,.yaml,.yml,.json,.tf,.hcl,.csv';
 const IAC_SOURCE_FORMATS = `${SOURCE_FORMATS},.tfvars,.bicep,.ts,.js,.py,.go,.cs`;
 const fieldClass = 'input-brand w-full min-w-0 text-sm';
-const tabs = [{ id: 'architecture', label: 'Architecture', Icon: Network }, { id: 'questions', label: 'Clarifications', Icon: HelpCircle }, { id: 'sources', label: 'Sources', Icon: FileText }];
+const tabs = [{ id: 'architecture', label: 'Architecture', Icon: Network }, { id: 'workflows', label: 'Workflows', Icon: ArrowRight }, { id: 'questions', label: 'Clarifications', Icon: HelpCircle }, { id: 'sources', label: 'Sources', Icon: FileText }];
 
 function Choice({ value, values, onChange, label, disabled }) {
   return <select aria-label={label} disabled={disabled} value={value || 'unknown'} onChange={(e) => onChange(e.target.value)} className={fieldClass}>
@@ -63,7 +64,7 @@ export default function ModelReviewWorkspace({ workspace, onChange, onPrepare, o
   const { payload, preview, preparedSignature } = workspace.draft;
   const sourceFormats = payload.input_kind === 'iac' ? IAC_SOURCE_FORMATS : SOURCE_FORMATS;
   const stale = preparedSignature !== draftSignature(payload);
-  const change = (patch, immediate = false) => onChange({ ...workspace, updatedAt: new Date().toISOString(), draft: { ...workspace.draft, previewDelay: immediate ? 0 : 350, payload: { ...payload, ...patch } } });
+  const change = (patch, immediate = false) => { if (!workspace.readOnly) onChange({ ...workspace, updatedAt: new Date().toISOString(), draft: { ...workspace.draft, previewDelay: immediate ? 0 : 350, payload: { ...payload, ...patch } } }); };
   const edit = (elementId, field, value) => change({ edits: [...payload.edits.filter((e) => e.element_id !== elementId || e.field !== field), { element_id: elementId, field, value, reason: `Architecture owner corrected ${field} for ${elementId}.` }] }, !['name', 'description', 'aliases'].includes(field));
   const valueFor = (id, field, fallback) => payload.edits.find((e) => e.element_id === id && e.field === field)?.value ?? fallback;
   const questions = preview?.questions || [];
@@ -80,7 +81,7 @@ export default function ModelReviewWorkspace({ workspace, onChange, onPrepare, o
   return <section className="mx-auto w-full max-w-6xl" aria-label="Model review workspace">
     <header className="border-b border-brand-200 pb-5 dark:border-brand-700">
       <div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs uppercase text-brand-500 dark:text-brand-400">{workspace.revisions.length ? `Revision ${workspace.revisions.length + 1} draft` : 'Architecture review'}</p><h2 className="mt-1 break-words text-2xl font-semibold">{workspace.projectName}</h2></div>
-        <div className="flex flex-wrap gap-2">{onBack && <button type="button" className="ui-button-secondary" onClick={onBack} disabled={busy}><ArrowLeft size={16} />{workspace.revisions.length ? 'Back to report' : 'Back to input'}</button>}<button type="button" className="ui-button-secondary" onClick={onSave} disabled={busy}><Save size={16} />Save draft</button></div></div>
+        <div className="flex flex-wrap gap-2">{onBack && <button type="button" className="ui-button-secondary" onClick={onBack} disabled={busy}><ArrowLeft size={16} />{workspace.revisions.length ? 'Back to report' : 'Back to input'}</button>}<button type="button" className="ui-button-secondary" onClick={onSave} disabled={busy || workspace.readOnly}><Save size={16} />Save draft</button></div></div>
       <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-xs text-brand-500 dark:text-brand-400"><span role="status">{saveStatus}</span><span>{payload.sources.filter((s) => s.included).length} included sources</span><span>{preview?.readiness.assumed_flows || 0} assumed flows</span><span>{questions.length} open questions</span><span>Not deployment-verified</span></div>
     </header>
     <nav aria-label="Model review sections" className="flex overflow-x-auto border-b border-brand-200 dark:border-brand-700">{tabs.map((item) => <button key={item.id} type="button" aria-current={tab === item.id ? 'page' : undefined} onClick={() => setTab(item.id)} className={`flex shrink-0 items-center gap-2 border-b-2 px-4 py-3 text-sm ${tab === item.id ? 'border-brand-primary text-brand-primary' : 'border-transparent text-brand-500 dark:text-brand-300'}`}><item.Icon size={16} />{item.label}</button>)}</nav>
@@ -89,7 +90,8 @@ export default function ModelReviewWorkspace({ workspace, onChange, onPrepare, o
       {previewError && <button type="button" className="ui-button-secondary" onClick={onPrepare} disabled={busy}><RefreshCw size={16} />Retry update</button>}
     </div>}
     {!!preview?.warnings.length && <details className="my-4 border-l-4 border-amber-500 px-4 py-2"><summary className="cursor-pointer text-sm font-semibold">{preview.warnings.length} items need review</summary><ul className="mt-2 space-y-2 text-sm text-brand-600 dark:text-brand-300">{preview.warnings.map((w, i) => <li key={`${w.type}-${i}`}>{w.message}</li>)}</ul></details>}
-    <fieldset disabled={busy} className="min-w-0">
+    <fieldset disabled={busy || workspace.readOnly} className="min-w-0">
+      {tab === 'workflows' && <WorkflowEditor workflows={payload.workflows} components={preview?.architecture.components || []} onChange={workflows => change({ workflows })} />}
       {tab === 'architecture' && <>
         {preview?.diagram && <ReviewDiagram code={preview.diagram} darkMode={darkMode} bindings={preview.diagram_bindings} onSelect={(ids) => setEvidenceSelection({ ids })} />}
         <h3 className="my-3 text-sm font-semibold">Components ({preview?.architecture.components.length || 0})</h3>
@@ -131,6 +133,6 @@ export default function ModelReviewWorkspace({ workspace, onChange, onPrepare, o
       </div>}
     </fieldset>
     {evidenceSelection && preview && <SourceEvidenceDialog selection={evidenceSelection} preview={preview} relatedRisks={workspace.revisions.at(-1)?.data?.threats || []} onClose={() => setEvidenceSelection(null)} onAliases={(id, aliases) => edit(id, 'aliases', aliases)} onSource={(fact) => { setOpenedSource(fact.document); setTab('sources'); setEvidenceSelection(null); }} />}
-    <footer className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-brand-200 py-5 dark:border-brand-700"><span className="text-xs text-brand-500 dark:text-brand-400">{preview?.readiness.status === 'preliminary' ? 'Preliminary assessment: unresolved questions or assumptions remain.' : 'Ready for architecture-owner review.'}</span><button type="button" className="btn-brand" disabled={busy || stale || !preview?.architecture.components.length} onClick={onAnalyze}><ArrowRight size={16} />{busy ? 'Working...' : 'Analyze reviewed model'}</button></footer>
+    <footer className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-brand-200 py-5 dark:border-brand-700"><span className="text-xs text-brand-500 dark:text-brand-400">{workspace.readOnly ? 'Read-only workspace' : preview?.readiness.status === 'preliminary' ? 'Preliminary assessment: unresolved questions or assumptions remain.' : 'Ready for architecture-owner review.'}</span><button type="button" className="btn-brand" disabled={workspace.readOnly || busy || stale || !preview?.architecture.components.length} onClick={onAnalyze}><ArrowRight size={16} />{busy ? 'Working...' : 'Analyze reviewed model'}</button></footer>
   </section>;
 }

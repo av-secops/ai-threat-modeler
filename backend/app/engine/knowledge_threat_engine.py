@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import re
-from collections import Counter
+from collections import Counter, OrderedDict
+from threading import RLock
+import hashlib
+import json
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from types import SimpleNamespace
@@ -34,7 +37,10 @@ class KnowledgeThreatEngine:
         # An engine owns a snapshot. The analyzer constructs a new engine when
         # reloading the KB, so no rule serialization belongs in the hot loop.
         self.knowledge_base = knowledge_base
+        self._predicate_cache = OrderedDict()
+        self._predicate_lock = RLock()
         typed_rules = knowledge_base.get_typed_rules()
+        self.content_digest = hashlib.sha256(json.dumps(knowledge_base.get_all_threats(), sort_keys=True, default=str).encode()).hexdigest()
         self._rule_count = len(knowledge_base.get_all_threats())
         self._module_counts = Counter(rule.source_module for rule in typed_rules)
         self._rules: List[_CompiledRule] = []
@@ -55,6 +61,7 @@ class KnowledgeThreatEngine:
         findings: List[Threat] = []
         evaluated = 0
         applicable = 0
+        cache_hits = 0
         allowed = set(allowed_modules or [])
         active_rules = [item for item in self._rules if not allowed or item.data["source_module"] in allowed]
         skipped_by_route = len(architecture.components or []) * sum(
@@ -74,6 +81,7 @@ class KnowledgeThreatEngine:
             ))
         for component in elements:
             props = _component_properties(component)
+            key = hashlib.sha256(json.dumps([props, component.evidence], sort_keys=True, default=str).encode()).hexdigest()
             explicit_negations = set(props.get("explicit_negations") or [])
             for compiled in active_rules:
                 rule = compiled.data
@@ -87,7 +95,18 @@ class KnowledgeThreatEngine:
                 if _has_negating_control(props, compiled.negating_controls, explicit_negations):
                     continue
                 applicable += 1
-                matched, evidence_fields = compiled.evaluate(props, explicit_negations)
+                with self._predicate_lock:
+                    cached = self._predicate_cache.get(key, {}).get(rule['id'])
+                if cached is None:
+                    matched, evidence_fields = compiled.evaluate(props, explicit_negations)
+                    with self._predicate_lock:
+                        self._predicate_cache.setdefault(key, {})[rule['id']] = (matched, tuple(evidence_fields))
+                        self._predicate_cache.move_to_end(key)
+                        while len(self._predicate_cache) > 128:
+                            self._predicate_cache.popitem(last=False)
+                else:
+                    matched, evidence_fields = cached
+                    cache_hits += 1
                 if not matched:
                     continue
                 if any(control_value(props, field) == "conflicting" for field in evidence_fields):
@@ -102,6 +121,10 @@ class KnowledgeThreatEngine:
             "compiled_predicate_rules": len(self._rules),
             "unsupported_predicate_rules": list(self._unsupported_rules),
             "predicates_evaluated": evaluated,
+            "predicate_cache_hits": cache_hits,
+            "predicate_executions": applicable - cache_hits,
+            "content_digest": self.content_digest,
+            "predicate_cache_scope": "Source and property fingerprint; rule snapshot replaced on KB reload",
             "applicable_predicates": applicable,
             "findings": len(findings),
             "skipped_by_specialist_route": skipped_by_route,

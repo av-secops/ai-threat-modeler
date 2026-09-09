@@ -375,6 +375,16 @@
                         "field": "same_site_cookie",
                         "op": "==",
                         "value": "none"
+                    },
+                    {
+                        "field": "cookie_authentication",
+                        "op": "==",
+                        "value": true
+                    },
+                    {
+                        "field": "csrf_protection",
+                        "op": "==",
+                        "value": false
                     }
                 ]
             },
@@ -383,7 +393,7 @@
         },
         "threat": {
             "title": "Cross-Site Request Forgery (CSRF) - Session Spoofing",
-            "description": "Lax cookie settings facilitate CSRF, where an attacker spoofs a request from the user's browser."
+            "description": "Cookie-authenticated requests explicitly permit cross-site cookies and have no CSRF protection. State-changing operations need anti-forgery validation; SameSite=None alone is not a vulnerability."
         },
         "risk": {
             "severity": "High",
@@ -417,7 +427,7 @@
             "derived_from": [
                 "same_site_cookie"
             ],
-            "reasoning": "Cookie SameSite attribute is missing or lax."
+            "reasoning": "Cookie authentication, SameSite=None and absent CSRF protection are all explicitly established."
         },
         "signal_source": [
             "configuration"
@@ -840,6 +850,7 @@
     },
     {
         "id": "I-001",
+        "cwe": ["CWE-311"],
         "category": "Information Disclosure",
         "resource_type": [
             "Database",
@@ -1355,7 +1366,8 @@
     },
     {
         "id": "E-001",
-        "category": "Elevation of Privilege",
+        "category": "Tampering",
+        "cwe": ["CWE-20"],
         "resource_type": [
             "WebClient",
             "API"
@@ -1375,11 +1387,11 @@
             "confidence": "high"
         },
         "threat": {
-            "title": "Missing Input Validation (XSS/Injection)",
-            "description": "Lack of validation allows code injection (XSS, SQLi)."
+            "title": "Missing server-side input validation",
+            "description": "Input validation is explicitly absent. Malformed or unexpected values may reach application logic; specific SQL injection, XSS or privilege-escalation paths require separate evidence."
         },
         "risk": {
-            "severity": "Critical",
+            "severity": "High",
             "likelihood": "High",
             "impact": "Low",
             "risk_score": 79.5,
@@ -1416,10 +1428,7 @@
             "code",
             "runtime"
         ],
-        "negating_controls": [
-            "waf",
-            "rasp"
-        ],
+        "negating_controls": [],
         "mapped_controls": {
             "owasp_top_10": [
                 "A03:2021-Injection"

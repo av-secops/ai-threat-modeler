@@ -398,12 +398,12 @@
                     }
                 ]
             },
-            "auto_detectable": true,
+            "auto_detectable": false,
             "confidence": "medium"
         },
         "threat": {
-            "title": "Third-Party Vendor Data Breach",
-            "description": "Integration with third-party services (Stripe, Twilio, SendGrid) without vendor security assessment creates supply chain risk."
+            "title": "Third-party data handling requires review",
+            "description": "Review data minimization, credential scope and supplier controls for the integration. An undocumented vendor assessment does not establish a data breach."
         },
         "risk": {
             "severity": "High",
@@ -515,9 +515,9 @@
                         "value": "k8s"
                     },
                     {
-                        "field": "pod_security_policy",
-                        "op": "!=",
-                        "value": true
+                        "field": "pod_security_enforced",
+                        "op": "==",
+                        "value": false
                     }
                 ]
             },
@@ -525,8 +525,8 @@
             "confidence": "medium"
         },
         "threat": {
-            "title": "Kubernetes Privilege Escalation",
-            "description": "Kubernetes pods lack security policies, allowing container escape and privilege escalation to host."
+            "title": "Kubernetes pod security enforcement disabled",
+            "description": "The workload explicitly lacks pod security enforcement. Review admission restrictions and workload privileges; this gap alone does not prove container escape. The removed PodSecurityPolicy API is not required."
         },
         "risk": {
             "severity": "High",
@@ -582,12 +582,12 @@
                     }
                 ]
             },
-            "auto_detectable": true,
+            "auto_detectable": false,
             "confidence": "medium"
         },
         "threat": {
-            "title": "Mobile App MITM Attack",
-            "description": "Mobile apps lack certificate pinning, allowing man-in-the-middle attacks to intercept patient data."
+            "title": "Mobile transport trust requires validation",
+            "description": "Review TLS certificate and hostname validation and the application's trust model. Lack of certificate pinning alone does not establish interception or imply healthcare data."
         },
         "risk": {
             "severity": "High",

@@ -1,7 +1,7 @@
 {
   "name": "aegis-threat",
   "private": true,
-  "version": "2.3.1",
+  "version": "2.3.2",
   "type": "module",
   "engines": {
     "node": "^22.13.0 || >=24.0.0",

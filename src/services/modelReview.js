@@ -27,8 +27,13 @@ export async function prepareModel(payload, { signal } = {}) {
   return preview;
 }
 
-export async function analyzeReviewedModel(payload) {
-  return mapAnalysisResult(await responseJSON(await fetch(`${API_BASE_URL}/model-review/analyze`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
-  })));
+export async function analyzeReviewedModel(payload, { jobId, onJob } = {}) {
+  const { enterprise, waitForJob } = await import('./enterprise');
+  let job;
+  if (jobId) {
+    job = await enterprise(`/jobs/${jobId}`);
+    if (['failed', 'interrupted'].includes(job.state)) job = await enterprise(`/jobs/${jobId}/retry`, 'POST');
+  } else job = await enterprise('/jobs', 'POST', payload);
+  await onJob?.(job.id);
+  return mapAnalysisResult(await waitForJob(job.id));
 }

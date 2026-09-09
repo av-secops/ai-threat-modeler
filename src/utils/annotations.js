@@ -34,6 +34,7 @@ export function saveAnnotations(projectName, annotations) {
     const all = readAll();
     all[projectName] = { ...EMPTY, ...(all[projectName] || {}), ...annotations };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
+    if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('aegis-review-saved', { detail: { key: projectName, annotations: all[projectName] } }));
   } catch (error) {
     console.error('Failed to save annotations:', error);
   }

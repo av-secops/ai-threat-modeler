@@ -16,6 +16,13 @@ class ReportGenerator:
         ]
 
         lines.extend(ReportGenerator._technical_scope(result))
+        inventory = (result.engine_status or {}).get('issue_inventory', {})
+        if inventory.get('declared'):
+            lines.extend(['### Source Issue Accountability',
+                f"{inventory['reported']} of {inventory['declared']} declared issues retained in findings; {inventory['unaccounted']} require review.", ''])
+            for issue in inventory['issues']:
+                lines.append(f"- {issue['id']}: {issue['statement']} | {issue['status']} | Findings: {', '.join(issue['finding_ids']) or 'none'}")
+            lines.append('')
         lines.extend(ReportGenerator._architecture_model(result))
         lines.extend(ReportGenerator._assets_section(result))
         lines.extend(ReportGenerator._data_flows_section(result))

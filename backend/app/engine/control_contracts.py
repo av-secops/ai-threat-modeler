@@ -54,6 +54,8 @@ def normalized_properties(properties: dict) -> dict:
 def boundary_dimensions(source, target) -> list[str]:
     dimensions = ['trust_level'] if source.trust_level != target.trust_level else []
     left, right = source.properties or {}, target.properties or {}
+    if 'canonical_boundaries' in left and 'canonical_boundaries' in right and set(left['canonical_boundaries']) != set(right['canonical_boundaries']):
+        dimensions.append('boundary_membership')
     for key in ('trust_boundary', 'cloud_account', 'tenant_id', 'environment'):
         if left.get(key) and right.get(key) and left[key] != right[key]:
             dimensions.append(key)

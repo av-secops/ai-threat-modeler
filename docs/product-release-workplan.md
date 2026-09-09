@@ -1,7 +1,9 @@
 # Product and release management workplan
 
-Status: Saved for future implementation. No feature implementation is authorized
-by saving this document. Resume when the user requests it.
+Status: Core workflow implemented on 9 September 2026 following user approval.
+See [product workspaces](product-workspaces.md) for the implemented behavior and
+deployment constraints. Per-product permissions, SSO and manual identity matching
+across independently recreated models remain future extensions to this design.
 
 ## Objective
 
@@ -43,9 +45,11 @@ analysis of the same release after correcting inputs or adding evidence.
 
 - List releases with their labels, dates, assessment status and confirmed
   critical/high finding counts.
-- Provide Create release, Manage applications and Compare releases.
+- Provide Create release and Compare releases. Application scope is chosen only
+  after opening a release, not through product-level application setup.
 - Applications belong to the product and retain their identity across releases.
-- Users can also create an application while working inside a release.
+- Users choose a complete release product or name an ad hoc standalone application
+  while working inside a release.
 
 ### 3. Create a release
 

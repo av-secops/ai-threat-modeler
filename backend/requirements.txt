@@ -1,6 +1,8 @@
-# Aegis Threat 2.3.1 backend dependencies (Python 3.10+; tested on 3.12).
+# Aegis Threat 2.3.2 backend dependencies (Python 3.10+; tested on 3.12).
 # Includes evaluation tools used by the local development launcher and CI.
 # Model weights are not installed by pip; see tools/prefetch_models.py.
+# Product workspaces and durable jobs use sqlite3 and concurrent.futures from
+# Python's standard library; no separate database driver or queue is required.
 
 # Web framework
 fastapi>=0.115.0,<1.0.0

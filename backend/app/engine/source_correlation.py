@@ -98,6 +98,27 @@ def _applicable(scope, component):
     return True
 
 
+def _subject(statement, control, lines, aliases):
+    mentions = find_mentions(re.sub(r'[-_]+', ' ', statement), aliases)
+    if mentions:
+        # Prefer the explicit subject immediately before the control's predicate.
+        terms = control_statements.CONTROL_TERMS.get(control, ())
+        starts = [m.start() for term in terms for m in control_statements._term_pattern(term).finditer(statement)]
+        before = [m for m in mentions if not starts or m[0] < min(starts)]
+        chosen = before[-1] if before else mentions[0]
+        return chosen[2], 'named_subject'
+    # Only a dedicated heading establishes inherited context. Arbitrary preceding
+    # component mentions are not sufficient to resolve an omitted subject.
+    for index, (line, _) in enumerate(lines):
+        if statement.strip() in line:
+            for previous, _ in reversed(lines[max(0, index - 4):index]):
+                if re.match(r'^\s*#{1,6}\s+|^\s*[^|:.]{2,100}:\s*$', previous):
+                    found = find_mentions(re.sub(r'[-_]+', ' ', previous), aliases)
+                    ids = {m[2] for m in found}
+                    return (next(iter(ids)), 'section_subject') if len(ids) == 1 else (None, 'ambiguous_subject')
+    return None, 'unresolved_subject'
+
+
 def _resolved_state(records):
     states = {r['state'] for r in records if r.get('applicable', True)}
     if {'present', 'absent'} <= states:
@@ -150,9 +171,8 @@ def reconcile_claims(architecture):
                     'kind': 'control', 'control': control, 'state': state, 'statement': statement,
                     'scope': scope, 'verification_status': 'not_runtime_verified', 'basis': 'source_statement'}
             fact['id'] = 'claim:' + fingerprint(fact)[:24]
-            fact['element_id'] = mentions[0][2] if mentions else None
-            fact['resolution'] = 'named_subject' if mentions else 'unresolved_subject'
-            if not mentions:
+            fact['element_id'], fact['resolution'] = _subject(statement, control, lines, aliases)
+            if not fact['element_id']:
                 unresolved.append(fact)
             else:
                 fact['applicable'] = _applicable(scope, components[fact['element_id']])

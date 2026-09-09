@@ -43,7 +43,7 @@ function Wait-Service($Process, [string]$Url, [string]$Log, [switch]$Api) {
         try {
             if ($Api) {
                 $health = Invoke-RestMethod -Uri $Url -TimeoutSec 2
-                if ($health.status -eq 'ok' -and $health.version -eq '2.3.1') { return }
+                if ($health.status -eq 'ok' -and $health.version -eq '2.3.2') { return }
             } else {
                 $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 2
                 if ($response.StatusCode -eq 200) { return }
@@ -69,7 +69,7 @@ function Start-ServiceProcess([string]$Name, [string]$Executable, [string[]]$Arg
 
 if ($Help) {
     Write-Host @'
-Aegis Threat 2.3.1 - Windows local launcher
+Aegis Threat 2.3.2 - Windows local launcher
 
 PowerShell: .\start.ps1 [-BackendPort 8000] [-FrontendPort 5173]
              [-InstallDependencies] [-NoBrowser] [-StartupTimeout 120]
@@ -161,7 +161,7 @@ try {
         }
     } finally { Pop-Location }
 
-    Write-Host 'Aegis Threat 2.3.1 - dependencies ready.'
+    Write-Host 'Aegis Threat 2.3.2 - dependencies ready.'
     if ($Check) { Write-Host 'Check passed; no servers were started.'; exit 0 }
     Test-FreePort $BackendPort
     Test-FreePort $FrontendPort

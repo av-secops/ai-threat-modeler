@@ -202,7 +202,7 @@ def _merge_platform_names(components: Dict[str, Any], text: str) -> List[Dict[st
         hosted_types = PLATFORM_TECHNOLOGIES.get(_platform_key(platform))
         if not hosted_types:
             continue
-        host = _host_for(platform, hosted_types, components)
+        host = _host_for(platform, hosted_types, components, text)
         if host is None:
             continue
         _absorb(host, platform)
@@ -224,7 +224,7 @@ def _merge_platform_names(components: Dict[str, Any], text: str) -> List[Dict[st
     return merges
 
 
-def _host_for(platform, hosted_types: Iterable[str], components: Dict[str, Any]):
+def _host_for(platform, hosted_types: Iterable[str], components: Dict[str, Any], text: str = ''):
     key = _platform_key(platform)
     candidates = [
         component for component in components.values()
@@ -232,6 +232,12 @@ def _host_for(platform, hosted_types: Iterable[str], components: Dict[str, Any])
         and component.type in tuple(hosted_types)
         and _states_platform(component, key)
     ]
+    if not candidates and text:
+        stated = [component for component in components.values()
+            if component.id != platform.id and component.type in tuple(hosted_types)
+            and re.search(r'\b' + re.escape(component.name) + r'\s+(?:is|is implemented in|is written in|is built with)\s+(?:an?\s+)?' + re.escape(key) + r'\b', text, re.I)]
+        # Shared runtimes are not evidence that two separately named services are one.
+        return stated[0] if len(stated) == 1 else None
     # The most specifically named host wins, so a platform attaches to "Customer
     # Mobile App" rather than to the bare "Mobile App" placeholder beside it.
     return max(candidates, key=lambda component: len(tokens_of(component.id)), default=None)

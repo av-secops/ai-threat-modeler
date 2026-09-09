@@ -18,7 +18,29 @@ function transaction(mode, work) {
   });
 }
 
-export const saveWorkspace = (workspace) => transaction('readwrite', (store) => store.put(structuredClone(workspace)));
+const saves = new Map();
+const serverVersions = new Map();
+export function saveWorkspace(workspace) {
+  const snapshot = structuredClone(workspace);
+  const save = (saves.get(workspace.id) || Promise.resolve()).catch(() => {}).then(async () => {
+    await transaction('readwrite', store => store.put(snapshot));
+    if (snapshot.server) {
+      const { enterprise } = await import('../services/enterprise');
+      const expected = Math.max(serverVersions.get(snapshot.id) || 0, snapshot.server.version || 0);
+      const server = await enterprise(`/releases/${snapshot.server.release_id}/workspaces`, 'PUT', {
+        workspace: snapshot, application_id: snapshot.server.application_id || null,
+        environment: snapshot.server.environment || 'production', expected_version: expected,
+      });
+      serverVersions.set(snapshot.id, server.version);
+      snapshot.server = server;
+      await transaction('readwrite', store => store.put(snapshot));
+    }
+    return snapshot;
+  });
+  saves.set(workspace.id, save);
+  save.finally(() => { if (saves.get(workspace.id) === save) saves.delete(workspace.id); }).catch(() => {});
+  return save;
+}
 export const loadWorkspace = (id) => transaction('readonly', (store) => store.get(id));
 export const loadWorkspaces = () => transaction('readonly', (store) => store.getAll());
 export const deleteWorkspace = (id) => transaction('readwrite', (store) => store.delete(id));

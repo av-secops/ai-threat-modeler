@@ -1488,29 +1488,11 @@ class ArchitectureParser:
         Extract and classify known security issues from description.
         Looks for 'Known Issues:' section and parses each issue.
         """
+        from .issue_inventory import extract_issues
         entries = []
         for source in self._analysis_sources(text):
             body = str(source.get('body') or '')
-            matches = list(re.finditer(r'(?im)(?:^|\s)known issues?\s*:', body))
-            for index, section in enumerate(matches):
-                end = matches[index + 1].start() if index + 1 < len(matches) else len(body)
-                issue_block = body[section.end():end]
-                next_section = re.search(
-                    r'(?im)^\s*(?:exclusions?|out of scope|assumptions?|components?|data flows?|architecture|mitigations?|controls?|notes?)\s*:',
-                    issue_block,
-                )
-                if next_section:
-                    issue_block = issue_block[:next_section.start()]
-
-                for raw_line in issue_block.splitlines() or [issue_block]:
-                    line = re.sub(r'^\s*(?:[-*]|\d+[.)])\s*', '', raw_line).strip()
-                    if not line:
-                        continue
-                    entries.extend(
-                        item.strip(' \t.;')
-                        for item in re.split(r'(?<=[.!?;])\s+(?=[A-Z0-9])', line)
-                        if item.strip(' \t.;')
-                    )
+            entries.extend(item['statement'] for item in extract_issues(body))
 
         deduplicated = []
         seen = set()
