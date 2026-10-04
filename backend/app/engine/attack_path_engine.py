@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 from collections import deque
+from copy import deepcopy
 from heapq import heappop, heappush
 from itertools import count
 from typing import Dict, List, Optional, Set, Tuple
 
 from . import graph
 from .control_contracts import presence, boundary_dimensions
+
+
+def _assumed(flow):
+    return bool(flow.assumed) or presence((flow.properties or {}).get('assumed')) is True
 
 
 def generate_attack_paths(system_model, threats) -> List[Dict]:
@@ -21,10 +26,14 @@ def generate_attack_paths(system_model, threats) -> List[Dict]:
     """
     components = {component.id: component for component in system_model.components or []}
     adjacency: Dict[str, List[Tuple[str, object]]] = {}
+    permission_cache = {}
     for flow in system_model.flows or []:
         if flow.source_id not in components or flow.target_id not in components:
             continue
-        if _permission_state(flow, components[flow.source_id], components[flow.target_id]) == "denied":
+        if any(components[i].properties.get('diagram_review_required') for i in (flow.source_id, flow.target_id)):
+            continue
+        permission_cache[id(flow)] = _permission_state(flow, components[flow.source_id], components[flow.target_id])
+        if permission_cache[id(flow)] == "denied":
             continue
         adjacency.setdefault(flow.source_id, []).append((flow.target_id, flow))
 
@@ -62,13 +71,15 @@ def generate_attack_paths(system_model, threats) -> List[Dict]:
             target_id, flow = route[index]
             if flow is None:
                 continue
-            inferred = bool(flow.assumed)
+            inferred = _assumed(flow)
             inferred_hops += int(inferred)
             source = components[source_id]
             destination = components[target_id]
             hop = {
                 "source": source_id,
                 "target": target_id,
+                "flow_id": flow.id or (flow.properties or {}).get('review_id') or '',
+                "flow_number": flow.flow_number,
                 "protocol": flow.protocol,
                 "data_type": flow.data_type,
                 "evidence_status": "inferred" if inferred else "explicit",
@@ -89,7 +100,7 @@ def generate_attack_paths(system_model, threats) -> List[Dict]:
                 "required_permissions": _required_permissions(flow, destination),
                 "identity_transition": _identity_transition(source, destination),
                 "authorization_transition": _authorization_transition(source, destination),
-                "permission_status": _permission_state(flow, source, destination),
+                "permission_status": permission_cache[id(flow)],
                 "permission_evidence": (flow.properties or {}).get("authorization_evidence") or {},
             }
             hops.append(hop)
@@ -155,9 +166,15 @@ def generate_attack_paths(system_model, threats) -> List[Dict]:
                 "identity_transition": hop["identity_transition"],
                 "required_permissions": hop["required_permissions"],
                 "transition": hop["authorization_transition"],
+                "status": hop['permission_status'],
             }
             for hop in hops
         ]
+        checks = _precondition_checks(threat, hops, components)
+        if any(check['state'] == 'contradicted' for check in checks):
+            _mark_without_path(threat, 'contradicted_precondition')
+            threat.explanation['precondition_checks'] = checks
+            continue
         paths.append({
             "id": f"PATH-{threat.id}",
             "entry_point": components[entry_id].name,
@@ -172,13 +189,18 @@ def generate_attack_paths(system_model, threats) -> List[Dict]:
             "confidence": confidence,
             "severity": threat.severity,
             "preconditions": threat.preconditions,
+            "precondition_checks": checks,
+            "precondition_status": 'unresolved' if any(check['state'] == 'unknown' for check in checks) else 'supported_by_submitted_evidence',
             "evidence": threat.evidence_details or _fallback_evidence(threat),
             "path_status": "explicit" if inferred_hops == 0 else "partially_inferred",
+            "reasoning_status": 'conditional_route' if inferred_hops == 0 else 'inferred_hypothesis',
+            "evidence_supported": inferred_hops == 0,
             "inferred_hops": inferred_hops,
             "onward_reach": onward,
             "explicit_onward_reach": sorted(explicit),
             "inferred_onward_reach": inferred_onward,
             "sensitive_data_reached": exposed_stores,
+            "sensitive_data_reach_basis": 'modeled_connectivity_only_not_demonstrated_access',
             "potential_sensitive_data_reached": potential_stores,
             "identities": [
                 *dict.fromkeys(
@@ -199,7 +221,7 @@ def generate_attack_paths(system_model, threats) -> List[Dict]:
             "assumptions": assumptions,
             "exploit_status": "not_verified",
             "permission_status": "supported_by_submitted_evidence" if all(hop['permission_status'] == 'allowed' for hop in hops) else "unresolved",
-            "verification_required": [f"Verify permissions for {hop['source']}->{hop['target']} using the source identity." for hop in hops if hop['permission_status'] != 'allowed'],
+            "verification_required": [check['requirement'] for check in checks if check['state'] == 'unknown'],
             "trust_boundary_crossings": [
                 f"{hop['source']}->{hop['target']}" for hop in hops
                 if hop["crosses_trust_boundary"]
@@ -212,14 +234,83 @@ def generate_attack_paths(system_model, threats) -> List[Dict]:
 
 def _permission_state(flow, source, destination) -> str:
     evidence = (flow.properties or {}).get('authorization_evidence') or {}
-    if flow.assumed or not isinstance(evidence, dict) or not evidence.get('source_ref'):
+    if (_assumed(flow) or not isinstance(evidence, dict)
+            or not isinstance(evidence.get('source_ref'), str) or not evidence['source_ref'].strip()):
+        return 'unknown'
+    if evidence.get('source_type') in ('inference', 'rule_evaluation', 'coverage_assessment', 'llm_challenger'):
+        return 'unknown'
+    if _effective_identity(source) in {'public_or_external_actor', 'unspecified_workload_identity'}:
         return 'unknown'
     if evidence.get('identity') != _effective_identity(source) or evidence.get('resource') != destination.id:
         return 'unknown'
-    required = _required_permissions(flow, destination)
-    if not required or required == ['not specified in architecture evidence'] or not set(required) <= set(evidence.get('actions') or []):
+    from .source_correlation import _applicable
+    if (not _applicable(evidence.get('scope', {}), destination)
+            or not _applicable(evidence.get('source_scope', {}), source)
+            or evidence.get('applicable') is False):
         return 'unknown'
+    scope = evidence.get('scope') or {}
+    endpoints = scope.get('endpoints') or []
+    if not isinstance(endpoints, list) or not all(isinstance(endpoint, str) for endpoint in endpoints):
+        return 'unknown'
+    if endpoints and (flow.properties or {}).get('endpoint') not in endpoints:
+        return 'unknown'
+    if scope.get('workflow_restricted') and not scope.get('workflow_id'):
+        return 'unknown'
+    if scope.get('workflow_id') and scope['workflow_id'] != (flow.properties or {}).get('workflow_id'):
+        return 'unknown'
+    if evidence.get('state') in ('planned', 'conflicting', 'partial', 'unknown'):
+        return 'unknown'
+    required = _required_permissions(flow, destination)
+    actions = evidence.get('actions')
+    if (not isinstance(actions, list) or not all(isinstance(action, str) for action in actions)
+            or not required or required in [['not specified in architecture evidence'], ['permission declared by IaC relationship']]
+            or not set(required) <= set(actions)):
+        return 'unknown'
+    if isinstance(evidence.get('policy_query'), dict):
+        from .policy_semantics import evaluate_access
+        query = evidence['policy_query']
+        if query.get('principal') != evidence['identity'] or query.get('resource') != (destination.properties.get('arn') or destination.id):
+            return 'unknown'
+        decisions = [evaluate_access({**query, 'action': action})['decision'] for action in required]
+        if 'explicit_deny' in decisions or 'implicit_deny' in decisions:
+            return 'denied'
+        return 'allowed' if all(decision == 'allowed_in_supplied_policies' for decision in decisions) else 'unknown'
     return {'allow': 'allowed', 'deny': 'denied'}.get(str(evidence.get('decision')).lower(), 'unknown')
+
+
+def _precondition_checks(threat, hops, components):
+    from .source_correlation import _applicable
+    checks = []
+    for index, hop in enumerate(hops):
+        checks.append({'id': f'flow-{index}', 'kind': 'topology', 'flow_id': hop['flow_id'],
+            'state': 'supported' if hop['evidence_status'] == 'explicit' else 'unknown',
+            'requirement': f"Confirm the directed flow {hop['source']}->{hop['target']} in the assessed deployment.",
+            'runtime_verified': False})
+        checks.append({'id': f'permission-{index}', 'kind': 'authorization', 'flow_id': hop['flow_id'],
+            'state': 'supported' if hop['permission_status'] == 'allowed' else 'unknown',
+            'requirement': f"Verify permissions for {hop['source']}->{hop['target']} using the source identity.",
+            'runtime_verified': False})
+        if index:
+            checks.append({'id': f'execution-{index}', 'kind': 'execution_context',
+                'component_id': hop['source'], 'identity': hop['source_identity'], 'state': 'unknown',
+                'requirement': f"Establish how attacker-controlled input causes {hop['source']} to execute the next operation; connectivity does not grant its workload identity.",
+                'runtime_verified': False})
+    target = components[hops[-1]['target']]
+    records = (threat.explanation or {}).get('precondition_evidence', [])
+    for index, requirement in enumerate(threat.preconditions or []):
+        applicable = [row for row in records if isinstance(row, dict)
+            and row.get('statement') == requirement and row.get('source_ref')
+            and row.get('component_id') == target.id and row.get('applicable') is not False
+            and _applicable(row.get('scope') or {}, target)]
+        states = {row.get('state') for row in applicable}
+        state = 'supported' if states == {'met'} else 'contradicted' if states == {'unmet'} else 'unknown'
+        checks.append({'id': f'exploit-{index}', 'kind': 'exploit', 'component_id': target.id,
+            'requirement': requirement, 'state': state, 'evidence': deepcopy(applicable), 'runtime_verified': False})
+    # A confirmed weakness still does not demonstrate exploitation.
+    checks.append({'id': 'exploit-validation', 'kind': 'validation', 'state': 'unknown',
+        'requirement': 'Review the exploit prerequisites and validate remediation in an authorized test environment.',
+        'runtime_verified': False})
+    return checks
 
 
 def _effective_identity(component) -> str:
@@ -229,7 +320,8 @@ def _effective_identity(component) -> str:
         "service_account", "workload_identity",
     ):
         value = properties.get(key)
-        if isinstance(value, str) and value.strip():
+        if (isinstance(value, str) and value.strip() and value.strip().lower() not in {'unknown', 'unspecified', 'none', 'null'}
+                and '${' not in value and '{{' not in value):
             return value.strip()
     if component.trust_level in {"public", "external"}:
         return "public_or_external_actor"
@@ -325,7 +417,7 @@ def _best_route(entries: List[str], target: str, adjacency: Dict[str, List[Tuple
             route.append((node, None))
             return list(reversed(route))
         for next_node, flow in adjacency.get(node, []):
-            cost = (inferred + int(bool(flow.assumed)), hops + 1, entry_index)
+            cost = (inferred + int(_assumed(flow)), hops + 1, entry_index)
             if next_node in costs and costs[next_node] <= cost:
                 continue
             costs[next_node] = cost
@@ -347,7 +439,7 @@ def _downstream(start: str, adjacency: Dict[str, List[Tuple[str, object]]], *, i
     while queue:
         node = queue.popleft()
         for next_node, flow in adjacency.get(node, []):
-            if next_node in visited or (flow.assumed and not include_assumed):
+            if next_node in visited or (_assumed(flow) and not include_assumed):
                 continue
             visited.add(next_node)
             queue.append(next_node)

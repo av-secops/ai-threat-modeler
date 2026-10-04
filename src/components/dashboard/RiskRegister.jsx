@@ -18,13 +18,15 @@ const noFlowReason = {
  * a gap in the model the analyst needs to close, so it is named rather than
  * shown as an absence of impact.
  */
-const FlowContext = ({ threat }) => {
+const FlowContext = ({ threat, onFlowSelect }) => {
     const scoped = threat.affected_data_flows || [];
     const related = threat.explanation?.component_flows || [];
     const heading = scoped.length ? 'Data flows' : related.length ? 'Flows touching this component' : 'Data flows';
 
     return (
         <div>
+            {!!threat.affected_flow_refs?.length && <div className="mb-2 flex flex-wrap items-center gap-2 text-sm font-semibold"><span>DFD flows:</span>{threat.affected_flow_refs.map(f => onFlowSelect ? <button key={f.id} type="button" onClick={() => onFlowSelect(f.id)} className="text-brand-primary underline dark:text-indigo-300">{f.number || f.id}</button> : <span key={f.id}>{f.number || f.id}</span>)}</div>}
+            {threat.flow_reference_status === 'unresolved' && <p className="mb-2 text-xs text-amber-800 dark:text-amber-200">Flow reference needs review; parallel or missing connections cannot be assigned automatically.</p>}
             <p className="text-xs font-semibold text-brand-600 dark:text-brand-400">{heading}</p>
             {scoped.length > 0 && (
                 <p className="mt-2 text-sm leading-6 text-brand-700 dark:text-brand-300">{scoped.join(', ')}</p>
@@ -145,9 +147,13 @@ const AttackRoute = ({ threat }) => {
             )}
             {reached.length > 0 && (
                 <p className="mt-2 text-sm leading-6 text-brand-700 dark:text-brand-300">
-                    Onward reach: sensitive data held by {reached.join(', ')}.
+                    Modeled connectivity reaches {reached.join(', ')}. Access is conditional on authorization and exploit prerequisites.
                 </p>
             )}
+            {!!path.precondition_checks?.length && <details className="mt-3 text-sm">
+                <summary className="cursor-pointer font-semibold">Attack prerequisites ({path.precondition_checks.filter(check => check.state === 'unknown').length} unresolved)</summary>
+                <ul className="mt-2 space-y-2">{path.precondition_checks.map(check => <li key={check.id} className="border-l-2 border-brand-200 pl-3 dark:border-brand-600"><span className="font-medium">{check.state === 'supported' ? 'Supported by input' : check.state === 'contradicted' ? 'Contradicted' : 'Needs evidence'}: </span>{check.requirement}</li>)}</ul>
+            </details>}
         </div>
     );
 };
@@ -278,7 +284,7 @@ export const ThreatCard = ({ threat, reviewState = 'open', onReviewStateChange }
 };
 
 /** Every finding at a glance, ordered by severity and risk score. */
-export const ThreatSection = ({ threats, onSelectThreat, compact = false }) => (
+export const ThreatSection = ({ threats, onSelectThreat, compact = false, reviewStates = {} }) => (
     <section className={clsx(insightCardBase, 'overflow-hidden')}>
         {!compact && <div className="flex items-center justify-between gap-4 border-b border-brand-200 px-5 py-4 dark:border-brand-700">
             <div>
@@ -301,6 +307,8 @@ export const ThreatSection = ({ threats, onSelectThreat, compact = false }) => (
                             <th className="w-20 px-1 py-3 md:w-28 md:px-4">Severity</th>
                             <th className="hidden w-44 px-4 py-3 md:table-cell">Affected STRIDE</th>
                             <th className="hidden w-48 px-4 py-3 md:table-cell">Affected component</th>
+                            <th className="hidden px-4 py-3 md:table-cell">DFD flow</th>
+                            <th className="hidden px-4 py-3 md:table-cell">Review status</th>
                             <th className="w-10 px-1 py-3 text-center md:w-20 md:px-4"><span className="sr-only md:not-sr-only">Details</span></th>
                         </tr>
                     </thead>
@@ -315,6 +323,8 @@ export const ThreatSection = ({ threats, onSelectThreat, compact = false }) => (
                                 <td className="px-1 py-4 md:px-4"><SeverityBadge severity={threat.severity} /></td>
                                 <td className="hidden px-4 py-4 text-sm font-medium text-brand-700 dark:text-brand-300 md:table-cell">{(threat.affected_stride_categories?.length ? threat.affected_stride_categories : [threat.stride_category || threat.category]).join(', ')}</td>
                                 <td className="hidden px-4 py-4 text-sm text-brand-600 dark:text-brand-300 md:table-cell">{affectedComponents(threat)}</td>
+                                <td className="hidden px-4 py-4 text-xs text-brand-600 dark:text-brand-300 md:table-cell">{threat.affected_flow_refs?.length ? threat.affected_flow_refs.map(f => f.number || f.id).join(', ') : threat.flow_reference_status === 'unresolved' ? 'Needs mapping' : 'Not flow-specific'}</td>
+                                <td className="hidden px-4 py-4 text-xs text-brand-600 dark:text-brand-300 md:table-cell">{reviewStateMeta[reviewStates[threat.id] || threat.review_status || 'pending_review']?.label || 'Pending Review'}</td>
                                 <td className="px-1 py-4 text-center md:px-4">
                                     <button
                                         type="button"
@@ -335,7 +345,7 @@ export const ThreatSection = ({ threats, onSelectThreat, compact = false }) => (
     </section>
 );
 
-function RiskDetailContent({ threat, reviewState, onReviewStateChange }) {
+function RiskDetailContent({ threat, reviewState, onReviewStateChange, onFlowSelect }) {
     const [tab, setTab] = useState('summary');
     const explanation = threat.explanation || {};
     const references = explanation.rule_provenance?.references || explanation.references || [];
@@ -359,15 +369,18 @@ function RiskDetailContent({ threat, reviewState, onReviewStateChange }) {
         <div className="min-h-52 space-y-5 pt-5 text-sm leading-6 text-brand-700 dark:text-brand-200">
             {tab === 'summary' && <>
                 <p className="break-words">{threat.description}</p>
+                <section><h3 className="mb-1 font-semibold">Risk source</h3><p>{(threat.finding_type || 'architecture').replaceAll('_', ' ')}{explanation.provenance?.knowledge_rule?.id ? ` / ${explanation.provenance.knowledge_rule.id}` : ''}</p></section>
+                <section><h3 className="mb-1 font-semibold">Affected security controls</h3><p>{threat.specific_control || explanation.matched_controls?.join(', ') || 'Control mapping requires review'}</p></section>
                 {(explanation.why_flagged || threat.root_cause) && <section><h3 className="mb-1 font-semibold text-brand-950 dark:text-white">Why this applies</h3><p>{explanation.why_flagged || threat.root_cause}</p></section>}
-                <FlowContext threat={threat} /><AttackRoute threat={threat} />
+                <FlowContext threat={threat} onFlowSelect={onFlowSelect} /><AttackRoute threat={threat} />
                 <section><h3 className="mb-1 font-semibold text-brand-950 dark:text-white">Verification status</h3><p>Based on submitted evidence. Exploitability has not been verified against a live deployment.</p></section>
             </>}
             {tab === 'evidence' && <>
                 {explanation.evidence_validation && <section className="border-b border-brand-200 pb-3 dark:border-brand-700"><h3 className="font-semibold">Evidence compatibility: {explanation.evidence_validation.status.replaceAll('_', ' ')}</h3>{explanation.evidence_validation.reasons.map(reason => <p key={reason}>{reason}</p>)}<p className="text-xs">Not runtime verified.</p></section>}
                 <EvidenceSources threat={threat} />
                 {(threat.evidence_details || []).map((item, index) => <section key={index} className="border-l-2 border-brand-200 pl-4 dark:border-brand-600">
-                    <p className="break-words">{item.statement}</p><p className="mt-1 break-words text-xs text-brand-500 dark:text-brand-300">{[item.document, item.locator, item.line ? `Line ${item.line}` : null, item.source_type?.replaceAll('_', ' ')].filter(Boolean).join(' / ')}</p>
+                    {item.control && <p className="mb-1 text-xs font-semibold">{item.control.replaceAll('_', ' ')}: {item.state || 'Unspecified'}</p>}
+                    <p className="break-words">{item.statement || item.question || 'No supporting statement recorded'}</p><p className="mt-1 break-words text-xs text-brand-500 dark:text-brand-300">{[item.document, item.locator, item.line ? `Line ${item.line}` : null, item.source_type?.replaceAll('_', ' '), item.reviewer && `Answered by ${item.reviewer}`, item.answered_at].filter(Boolean).join(' / ')}</p>
                 </section>)}
                 {!threat.evidence_details?.length && <p>No source-level evidence was captured.</p>}
                 {!!explanation.correlated_evidence?.length && <details className="border-t border-brand-200 pt-3 dark:border-brand-700"><summary className="cursor-pointer font-semibold">Cross-source control evidence ({explanation.correlated_evidence.length})</summary>{explanation.correlated_evidence.map((claim) => <section key={claim.id} className="mt-3 border-l-2 border-brand-200 pl-3 dark:border-brand-600"><p className="text-xs font-semibold">{claim.control.replaceAll('_', ' ')}: {claim.state}{claim.scope_status === 'scope_unconfirmed' ? ' (scope unconfirmed)' : ''}</p><p className="break-words">{claim.statement}</p><p className="break-words text-xs text-brand-500 dark:text-brand-300">{[claim.document, claim.locator, claim.line && `Line ${claim.line}`, claim.scope?.environment, ...(claim.scope?.endpoints || [])].filter(Boolean).join(' | ')}</p></section>)}</details>}
@@ -387,12 +400,22 @@ function RiskDetailContent({ threat, reviewState, onReviewStateChange }) {
                 <section><h3 className="mb-2 font-semibold text-brand-950 dark:text-white">Recommended change</h3><p className="whitespace-pre-wrap break-words">{threat.mitigation}</p></section>
                 {threat.implementation_detail && threat.implementation_detail !== threat.mitigation && <pre className="overflow-x-auto whitespace-pre-wrap break-words border-y border-brand-200 py-4 text-xs dark:border-brand-700">{threat.implementation_detail}</pre>}
                 <section><h3 className="mb-2 font-semibold text-brand-950 dark:text-white">Verify the fix</h3><p>{explanation.verification || 'Verify the control on the affected component, run an authorized negative test, and reanalyze the updated evidence.'}</p></section>
+                {!!explanation.remediation_validation?.criteria?.length && <section aria-label="Remediation acceptance criteria">
+                    <h3 className="mb-2 font-semibold text-brand-950 dark:text-white">Acceptance criteria</h3>
+                    <ol className="space-y-4">{explanation.remediation_validation.criteria.map((criterion, index) => <li key={criterion.id} className="border-l-2 border-brand-200 pl-3 dark:border-brand-600">
+                        <p className="font-medium">{index + 1}. {criterion.control?.replaceAll('_', ' ') || 'Owner-defined verification'}</p>
+                        <p className="mt-1">{criterion.procedure}</p>
+                        <p className="mt-1"><span className="font-medium">Expected result: </span>{criterion.acceptance_condition}</p>
+                        <p className="mt-1 text-xs">Required evidence: {(criterion.required_evidence || []).join('; ')}</p>
+                        <p className="mt-1 text-xs text-brand-500 dark:text-brand-300">Not performed by Aegis.</p>
+                    </li>)}</ol>
+                </section>}
             </>}
         </div>
     </div>;
 }
 
-export const RiskDetailsModal = ({ threat, reviewState, onReviewStateChange, onClose }) => {
+export const RiskDetailsModal = ({ threat, reviewState, onReviewStateChange, onClose, children, onFlowSelect }) => {
     const dialogRef = useRef(null);
     useEffect(() => {
         if (!threat) return undefined;
@@ -401,7 +424,7 @@ export const RiskDetailsModal = ({ threat, reviewState, onReviewStateChange, onC
         const handleKeyDown = (event) => {
             if (event.key === 'Escape') onClose();
             if (event.key === 'Tab') {
-                const items = Array.from(dialogRef.current?.querySelectorAll('button:not([disabled]), select, input, a[href]') || []);
+                const items = Array.from(dialogRef.current?.querySelectorAll('button:not([disabled]), select:not([disabled]), input:not([disabled]), textarea:not([disabled]), a[href]') || []).filter(item => !item.closest('fieldset[disabled]'));
                 const first = items[0], last = items.at(-1);
                 if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
                 if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
@@ -437,7 +460,8 @@ export const RiskDetailsModal = ({ threat, reviewState, onReviewStateChange, onC
                 >
                     <X className="h-4 w-4" />
                 </button>
-                <RiskDetailContent key={threat.id} threat={threat} reviewState={reviewState} onReviewStateChange={onReviewStateChange} />
+                <RiskDetailContent key={threat.id} threat={threat} reviewState={reviewState} onReviewStateChange={onReviewStateChange} onFlowSelect={onFlowSelect} />
+                {children}
             </div>
         </div>
     );

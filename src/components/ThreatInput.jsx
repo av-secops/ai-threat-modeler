@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { Send, Cpu, ChevronDown, Upload, FileText } from 'lucide-react';
+import { applicationTypes } from '../utils/assessmentCatalog';
+import { enterprise } from '../services/enterprise';
 
 const DOMAIN_OPTIONS = [
     { value: 'general', label: 'General Software' },
@@ -89,21 +91,29 @@ KNOWN ISSUES:
     }
 };
 
-const ThreatInput = ({ onAnalyze, isAnalyzing }) => {
+const ThreatInput = ({ onAnalyze, isAnalyzing, defaultProjectName }) => {
     const [description, setDescription] = useState('');
-    const [projectName, setProjectName] = useState('My Security Audit');
+    const [projectName, setProjectName] = useState(defaultProjectName || 'My Security Audit');
     const [showTemplates, setShowTemplates] = useState(false);
     const [useLocalSlm, setUseLocalSlm] = useState(true);
     const [domainProfile, setDomainProfile] = useState('general');
     const [uploadedFiles, setUploadedFiles] = useState([]);
+    const [diagramFiles, setDiagramFiles] = useState([]);
+    const [selectedTypes, setSelectedTypes] = useState(['web']);
+    const [otherType, setOtherType] = useState('');
+    const [importUrl, setImportUrl] = useState('');
+    const [importedSource, setImportedSource] = useState(null);
+    const [importError, setImportError] = useState('');
+    const [importing, setImporting] = useState(false);
 
-    const canSubmit = description.trim() || uploadedFiles.length > 0;
+    const canSubmit = (description.trim() || uploadedFiles.length > 0 || diagramFiles.length > 0 || importedSource) && selectedTypes.length && (!selectedTypes.includes('other') || otherType.trim());
 
     const handleSubmit = (e) => {
         e.preventDefault();
         if (canSubmit) {
             onAnalyze(description, projectName, useLocalSlm, {
                 domainProfile,
+                applicationTypes: selectedTypes, otherApplicationType: otherType, importedSource, diagramFiles,
                 files: uploadedFiles,
                 contextText: description,
             });
@@ -116,6 +126,7 @@ const ThreatInput = ({ onAnalyze, isAnalyzing }) => {
             if (canSubmit && !isAnalyzing) {
                 onAnalyze(description, projectName, useLocalSlm, {
                     domainProfile,
+                    applicationTypes: selectedTypes, otherApplicationType: otherType, importedSource, diagramFiles,
                     files: uploadedFiles,
                     contextText: description,
                 });
@@ -125,7 +136,8 @@ const ThreatInput = ({ onAnalyze, isAnalyzing }) => {
 
     const handleFileUpload = (e) => {
         const files = Array.from(e.target.files || []);
-        setUploadedFiles(files);
+        setUploadedFiles(old => [...old, ...files]);
+        e.target.value = '';
     };
 
     const applyTemplate = (key) => {
@@ -178,8 +190,9 @@ const ThreatInput = ({ onAnalyze, isAnalyzing }) => {
                 </div>
                 <div className="mb-5 grid gap-4 lg:grid-cols-[1.1fr_0.75fr_1fr]">
                     <div>
-                    <label className="ui-label">Project Name</label>
+                    <label htmlFor="threat-model-name" className="ui-label">Threat model name</label>
                     <input
+                        id="threat-model-name"
                         type="text"
                         value={projectName}
                         onChange={(e) => setProjectName(e.target.value)}
@@ -188,23 +201,21 @@ const ThreatInput = ({ onAnalyze, isAnalyzing }) => {
                     />
                     </div>
                     <div>
-                        <label className="ui-label">Domain Profile</label>
+                        <label className="ui-label" htmlFor="application-type">Select Application Type</label>
                         <select
-                            value={domainProfile}
-                            onChange={(e) => setDomainProfile(e.target.value)}
+                            id="application-type"
+                            value={selectedTypes[0] || ''}
+                            onChange={(e) => setSelectedTypes([e.target.value])}
                             className="input-brand w-full font-mono"
                         >
-                            {DOMAIN_OPTIONS.map((option) => (
-                                <option key={option.value} value={option.value}>{option.label}</option>
-                            ))}
+                            {Object.entries(applicationTypes).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
                         </select>
+                        {selectedTypes.includes('other') && <input className="input-brand mt-2 w-full" aria-label="Other application type" value={otherType} maxLength={200} onChange={e => setOtherType(e.target.value)} placeholder="Application type" />}
                     </div>
-                    <div className="ui-subpanel px-4 py-3">
-                        <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-brand-500">Best Inputs</div>
-                        <p className="text-sm leading-6 text-brand-700 dark:text-brand-300">
-                            Requirements, architecture design, auth, data stores, external APIs, trust boundaries, deployment, and known weaknesses.
-                        </p>
-                    </div>
+                    <details className="py-2"><summary className="cursor-pointer text-sm">Additional scope</summary>
+                        <label className="ui-label mt-3">Business domain<select value={domainProfile} onChange={e => setDomainProfile(e.target.value)} className="input-brand mt-1 w-full">{DOMAIN_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}</select></label>
+                        <div className="mt-3 flex flex-wrap gap-3">{Object.entries(applicationTypes).map(([id, label]) => <label key={id} className="text-xs"><input type="checkbox" checked={selectedTypes.includes(id)} onChange={e => setSelectedTypes(e.target.checked ? [...selectedTypes, id] : selectedTypes.filter(v => v !== id))} /> {label}</label>)}</div>
+                    </details>
                 </div>
                 <form onSubmit={handleSubmit} className="relative">
                     <div className="ui-subpanel mb-4">
@@ -221,7 +232,6 @@ const ThreatInput = ({ onAnalyze, isAnalyzing }) => {
                                 <input
                                     type="file"
                                     multiple
-                                    accept=".txt,.md,.markdown,.rst,.pdf,.docx,.json,.yaml,.yml,.tf,.hcl,.csv"
                                     className="hidden"
                                     onChange={handleFileUpload}
                                     disabled={isAnalyzing}
@@ -230,9 +240,9 @@ const ThreatInput = ({ onAnalyze, isAnalyzing }) => {
                         </div>
                         {uploadedFiles.length > 0 && (
                             <div className="mt-4 flex flex-wrap gap-2">
-                                {uploadedFiles.map((file) => (
+                                {uploadedFiles.map((file, index) => (
                                     <span
-                                        key={`${file.name}-${file.size}`}
+                                        key={`${file.name}-${file.size}-${index}`}
                                         className="ui-chip"
                                     >
                                         <FileText className="h-3.5 w-3.5" />
@@ -242,6 +252,12 @@ const ThreatInput = ({ onAnalyze, isAnalyzing }) => {
                             </div>
                         )}
                     </div>
+                    <details className="mb-4 border-y border-brand-200 py-3 dark:border-brand-700"><summary className="cursor-pointer text-sm">Import documentation</summary>
+                        <div className="mt-3 flex flex-wrap gap-2"><input aria-label="Documentation URL" type="url" className="input-brand min-w-0 flex-1 text-sm" value={importUrl} onChange={e => setImportUrl(e.target.value)} placeholder="https://approved-host/design.pdf" />
+                            <button type="button" className="ui-button-secondary" disabled={importing || !importUrl.trim()} onClick={async () => { setImporting(true); setImportError(''); try { setImportedSource(await enterprise('/sources/import', 'POST', { url: importUrl })); } catch (error) { setImportError(error.message); } finally { setImporting(false); } }}><Upload size={16} />{importing ? 'Importing...' : 'Import'}</button></div>
+                        {importedSource && <p className="mt-2 text-sm">{importedSource.name}</p>}{importError && <p role="alert" className="mt-2 text-sm text-red-700 dark:text-red-300">{importError}</p>}
+                    </details>
+                    <div className="mb-4 flex flex-wrap items-center gap-3"><label className="ui-button-secondary cursor-pointer"><Upload size={16} />Architecture diagram<input type="file" multiple aria-label="Upload architecture diagram" className="hidden" accept=".drawio,.xml,.mmd,.mermaid,.png,.jpg,.jpeg,.pdf" onChange={e => setDiagramFiles([...e.target.files])} disabled={isAnalyzing} /></label>{diagramFiles.map(file => <span className="text-xs" key={file.name}>{file.name}</span>)}</div>
                     <textarea
                         className="input-brand h-56 w-full resize-none font-mono text-sm leading-relaxed"
                         aria-label="Architecture description"

@@ -1,6 +1,7 @@
 {
   "schema_version": "iac-security-kb-1.0",
   "profiles": {
+    "dockerfile": {"formats": ["dockerfile"], "owasp_top_10": ["A05:2021-Security Misconfiguration"], "nist_800_53": ["AC-6", "CM-6"], "references": ["https://docs.docker.com/reference/dockerfile/#user", "https://docs.docker.com/build/building/multi-stage/"]},
     "aws": {"formats": ["terraform", "cloudformation"], "owasp_top_10": ["A05:2021-Security Misconfiguration"], "nist_800_53": ["AC-6", "CM-6", "RA-5"], "references": ["https://docs.aws.amazon.com/prescriptive-guidance/latest/terraform-aws-provider-best-practices/security.html", "https://docs.aws.amazon.com/wellarchitected/latest/security-pillar/welcome.html"]},
     "azure": {"formats": ["terraform"], "owasp_top_10": ["A05:2021-Security Misconfiguration"], "nist_800_53": ["AC-6", "CM-6", "SC-7"], "references": ["https://learn.microsoft.com/azure/security/fundamentals/best-practices-and-patterns"]},
     "gcp": {"formats": ["terraform"], "owasp_top_10": ["A05:2021-Security Misconfiguration"], "nist_800_53": ["AC-6", "CM-6", "SC-7"], "references": ["https://cloud.google.com/docs/security/best-practices"]},
@@ -13,6 +14,7 @@
     "helm": {"formats": ["helm", "helm-values", "kustomize"], "owasp_top_10": ["A05:2021-Security Misconfiguration"], "nist_800_53": ["IA-5", "CM-6"], "references": ["https://helm.sh/docs/chart_best_practices/"]}
   },
   "rules": [
+    {"id":"IAC-DOCKERFILE-ROOT-USER","title":"Final image explicitly selects the root user","severity":"Medium","category":"Elevation of Privilege","profile":"dockerfile","resource_types":["Dockerfile final stage"],"cwe":["CWE-250"]},
     {"id":"IAC-AWS-APIGW-NO-AUTH","title":"API Gateway method has no authorization","severity":"High","category":"Spoofing","profile":"aws","resource_types":["aws_api_gateway_method","AWS::ApiGateway::Method"],"cwe":["CWE-306"]},
     {"id":"IAC-AWS-CLOUDTRAIL-DISABLED","title":"CloudTrail logging is disabled","severity":"Critical","category":"Repudiation","profile":"aws","resource_types":["aws_cloudtrail","AWS::CloudTrail::Trail"],"cwe":["CWE-778"]},
     {"id":"IAC-AWS-CLOUDTRAIL-NO-VALIDATION","title":"CloudTrail log validation is disabled","severity":"High","category":"Tampering","profile":"aws","resource_types":["aws_cloudtrail","AWS::CloudTrail::Trail"],"cwe":["CWE-345"]},

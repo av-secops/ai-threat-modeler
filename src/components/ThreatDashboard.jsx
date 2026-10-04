@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import AssuranceEvidence from './dashboard/AssuranceEvidence';
+import { diagramQuality } from '../utils/diagramQuality';
 import {
     BadgeCheck,
     BarChart3,
@@ -17,6 +18,9 @@ import {
     ZoomIn,
     ZoomOut,
     RotateCcw,
+    Maximize2,
+    Minimize2,
+    Focus,
     Pencil,
 } from 'lucide-react';
 import { clsx } from 'clsx';
@@ -41,12 +45,18 @@ import { loadAnnotations, saveAnnotations } from '../utils/annotations';
 import AnalystWorkbench from './AnalystWorkbench';
 import AnalysisCopilot from './AnalysisCopilot';
 import { recordFindingFeedback } from '../services/retrievalFeedback';
+import { enterprise } from '../services/enterprise';
+import { API_BASE_URL } from '../config';
+import SecurityReports from './dashboard/SecurityReports';
+import RiskReviewForm from './dashboard/RiskReviewForm';
+import ArchitectureFlowTable from './dashboard/ArchitectureFlowTable';
+import { canonicalDiagramId, clampDiagramZoom, fitDiagramZoom, flowKey, focusedDiagram, isAssumedFlow, MAX_DIAGRAM_ZOOM, MIN_DIAGRAM_ZOOM } from '../utils/diagramViews';
 
 const resultViews = [
     { id: 'overview', label: 'Overview', icon: LayoutDashboard },
     { id: 'architecture', label: 'Architecture', icon: Network },
     { id: 'register', label: 'Risk register', icon: ShieldAlert },
-    { id: 'assurance', label: 'Assurance', icon: BadgeCheck },
+    { id: 'assurance', label: 'Security Reports', icon: BadgeCheck },
     { id: 'report', label: 'Report', icon: FileText },
 ];
 
@@ -64,14 +74,26 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, onRevi
     const reviewKey = annotationScope || projectName;
     const mermaidRef = useRef(null);
     const diagramViewportRef = useRef(null);
+    const diagramPanelRef = useRef(null);
+    const zoomAnchor = useRef(null);
     const toast = useToast();
     const [copiedDiagram, setCopiedDiagram] = useState(false);
     const [reviewStates, setReviewStates] = useState({});
     const [selectedThreat, setSelectedThreat] = useState(null);
+    const [serverReviews, setServerReviews] = useState({ latest: {}, events: [] });
+    const [reviewLoadError, setReviewLoadError] = useState('');
+    const assessment = data?.engine_status?.assessment;
+    const reportId = assessment?.report_id;
     const [diagramZoom, setDiagramZoom] = useState(1);
     const [diagramView, setDiagramView] = useState('system');
+    const [focusedFlow, setFocusedFlow] = useState('');
+    const [focusedComponent, setFocusedComponent] = useState('');
+    const [diagramMode, setDiagramMode] = useState('diagram');
+    const [expandedDiagram, setExpandedDiagram] = useState(false);
+    const [diagramError, setDiagramError] = useState('');
+    const focusedView = useMemo(() => focusedDiagram(data?.architecture, { flowId: focusedFlow, componentId: focusedComponent, threats: data?.threats }), [data, focusedFlow, focusedComponent]);
     const selectedDiagram = data?.engine_status?.diagram_views?.find(view => view.id === diagramView);
-    const displayedDiagram = selectedDiagram?.diagram || data?.diagram;
+    const displayedDiagram = focusedView?.diagram || selectedDiagram?.diagram || data?.diagram;
     const diagramZoomRef = useRef(1);
     const [filters, setFilters] = useState({
         severity: 'all',
@@ -89,12 +111,16 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, onRevi
         setSelectedThreat(null);
         setFilters({ severity: 'all', category: 'all', tier: 'all', search: '' });
         setDiagramZoom(1);
+        setFocusedFlow('');
+        setFocusedComponent('');
+        setDiagramView('system');
+        setDiagramMode('diagram');
     }
 
     useEffect(() => {
         let cancelled = false;
         const renderDiagram = async () => {
-            if (activeView !== 'architecture' || !data?.diagram || !mermaidRef.current) return;
+            if (activeView !== 'architecture' || diagramMode !== 'diagram' || !displayedDiagram || !mermaidRef.current) return;
 
             try {
                 const { default: mermaid } = await import('mermaid');
@@ -107,7 +133,8 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, onRevi
                 });
 
                 mermaidRef.current.innerHTML = '';
-                const diagramId = `mermaid-diagram-${Date.now()}`;
+                setDiagramError('');
+                const diagramId = `mermaid-diagram-${crypto.randomUUID()}`;
                 const { svg } = await mermaid.render(diagramId, displayedDiagram);
                 if (cancelled || !mermaidRef.current) return;
                 mermaidRef.current.innerHTML = svg;
@@ -133,40 +160,83 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, onRevi
                     const viewBox = (svgElement.getAttribute('viewBox') || '').split(/\s+/).map(Number);
                     const viewWidth = viewBox[2] || 900;
                     const viewHeight = viewBox[3] || 560;
-                    const availableWidth = Math.max(240, (diagramViewportRef.current?.clientWidth || 1020) - 48);
-                    const availableHeight = Math.max(220, (diagramViewportRef.current?.clientHeight || 480) - 48);
-                    const fitScale = Math.min(availableWidth / viewWidth, availableHeight / viewHeight, 1);
-                    svgElement.dataset.baseWidth = String(Math.round(viewWidth * fitScale));
-                    svgElement.dataset.baseHeight = String(Math.round(viewHeight * fitScale));
+                    // Zoom is relative to intrinsic SVG size, not an already-shrunken thumbnail.
+                    svgElement.dataset.baseWidth = String(viewWidth);
+                    svgElement.dataset.baseHeight = String(viewHeight);
+                    svgElement.dataset.theme = darkMode ? 'dark' : 'light';
                     svgElement.removeAttribute('width');
                     svgElement.removeAttribute('height');
-                    resizeDiagramSvg(svgElement, diagramZoomRef.current);
+                    const initialZoom = 1;
+                    zoomAnchor.current = null;
+                    resizeDiagramSvg(svgElement, initialZoom);
+                    diagramZoomRef.current = initialZoom;
+                    setDiagramZoom(initialZoom);
+                    diagramViewportRef.current?.scrollTo(0, 0);
+                    const nodeBindings = focusedView?.nodes || await Promise.all((data.architecture?.components || []).map(async c => ({ element_id: c.id, diagram_id: await canonicalDiagramId(c.id) })));
+                    if (cancelled) return;
+                    svgElement.querySelectorAll('.node').forEach(node => {
+                        const id = node.id.replace(`${diagramId}-`, '');
+                        const binding = nodeBindings.find(item => id.startsWith(`flowchart-${item.diagram_id}-`));
+                        if (!binding) return;
+                        const focus = () => { setFocusedComponent(binding.element_id); setFocusedFlow(''); };
+                        node.setAttribute('role', 'button'); node.setAttribute('tabindex', '0');
+                        node.setAttribute('aria-label', `Focus component ${node.textContent.trim()}`);
+                        node.style.cursor = 'pointer';
+                        node.addEventListener('click', event => { event.stopPropagation(); focus(); });
+                        node.addEventListener('keydown', event => { if (['Enter', ' '].includes(event.key)) { event.preventDefault(); focus(); } });
+                    });
+                    const indexes = focusedView?.indexes || data.engine_status?.diagram_views?.find(view => view.diagram === displayedDiagram)?.coverage?.flow_indexes || (data.architecture?.flows || []).map((_, i) => i);
+                    const links = [...svgElement.querySelectorAll('.flowchart-link')];
+                    links.forEach((link, index) => {
+                        const flow = data.architecture?.flows?.[indexes[index]];
+                        if (!flow) return;
+                        const key = flowKey(flow, indexes[index]);
+                        link.setAttribute('tabindex', '0'); link.setAttribute('role', 'button');
+                        link.setAttribute('aria-label', `Inspect ${flow.flow_number || 'data flow'}`);
+                        link.style.cursor = 'pointer';
+                        link.addEventListener('click', event => { event.stopPropagation(); setFocusedFlow(key); setFocusedComponent(''); });
+                        link.addEventListener('keydown', event => { if (['Enter', ' '].includes(event.key)) { event.preventDefault(); setFocusedFlow(key); setFocusedComponent(''); } });
+                        link.style.setProperty('stroke', focusedFlow === key ? '#0d9488' : darkMode ? '#d4dee9' : '#475569', 'important');
+                        if (key === focusedFlow) link.style.setProperty('stroke-width', '3px', 'important');
+                    });
+                    if (darkMode) svgElement.querySelectorAll('marker path, .arrowMarkerPath').forEach(node => {
+                        node.style.setProperty('fill', '#d4dee9', 'important'); node.style.setProperty('stroke', '#d4dee9', 'important');
+                    });
                 }
             } catch (error) {
                 console.error('Mermaid rendering error:', error);
-                if (!cancelled && mermaidRef.current) mermaidRef.current.textContent = 'The architecture diagram could not be rendered.';
+                if (!cancelled) setDiagramError('The diagram could not be rendered. The flow list remains available.');
             }
         };
 
         renderDiagram();
         return () => { cancelled = true; };
-    }, [activeView, data, darkMode, displayedDiagram]);
+    }, [activeView, data, darkMode, displayedDiagram, focusedFlow, focusedView, diagramMode]);
 
     useEffect(() => {
         diagramZoomRef.current = diagramZoom;
         resizeDiagramSvg(mermaidRef.current?.querySelector('svg'), diagramZoom);
+        const anchor = zoomAnchor.current;
+        if (anchor && diagramViewportRef.current) {
+            diagramViewportRef.current.scrollLeft = anchor.left * diagramZoom / anchor.zoom - anchor.x;
+            diagramViewportRef.current.scrollTop = anchor.top * diagramZoom / anchor.zoom - anchor.y;
+            zoomAnchor.current = null;
+        }
     }, [diagramZoom]);
 
     useEffect(() => {
         const viewport = diagramViewportRef.current;
-        if (activeView !== 'architecture' || !viewport) return undefined;
+        if (activeView !== 'architecture' || diagramMode !== 'diagram' || !viewport) return undefined;
         const wheel = (event) => {
             event.preventDefault();
-            setDiagramZoom((current) => Math.min(2.5, Math.max(0.5, Number((current + (event.deltaY < 0 ? 0.1 : -0.1)).toFixed(2)))));
+            const rect = viewport.getBoundingClientRect();
+            const x = event.clientX - rect.left; const y = event.clientY - rect.top;
+            zoomAnchor.current = { left: viewport.scrollLeft + x, top: viewport.scrollTop + y, zoom: diagramZoomRef.current, x, y };
+            setDiagramZoom(current => clampDiagramZoom(current * (event.deltaY < 0 ? 1.15 : 1 / 1.15)));
         };
         let drag;
         const down = (event) => {
-            if (event.button !== 0 || event.target.closest('button, a, input')) return;
+            if (event.button !== 0 || event.target.closest('button, a, input, [role="button"]')) return;
             drag = { x: event.clientX, y: event.clientY, left: viewport.scrollLeft, top: viewport.scrollTop };
             viewport.setPointerCapture(event.pointerId);
         };
@@ -188,7 +258,13 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, onRevi
             viewport.removeEventListener('pointerup', up);
             viewport.removeEventListener('pointercancel', up);
         };
-    }, [activeView]);
+    }, [activeView, diagramMode]);
+
+    useEffect(() => {
+        const changed = () => setExpandedDiagram(document.fullscreenElement === diagramPanelRef.current && !!document.fullscreenElement);
+        document.addEventListener('fullscreenchange', changed);
+        return () => document.removeEventListener('fullscreenchange', changed);
+    }, []);
 
     useEffect(() => {
         // A reviewer's decision outranks the engine's default. Re-analysis
@@ -198,13 +274,22 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, onRevi
         const stored = loadAnnotations(reviewKey).reviewStates;
         const nextStates = {};
         (data?.threats || []).forEach((threat) => {
-            nextStates[threat.id] = stored[threat.id] || threat.review_state || 'open';
+            nextStates[threat.id] = reportId ? 'pending_review' : stored[threat.id] || threat.review_state || 'open';
         });
         queueMicrotask(() => setReviewStates(nextStates));
-    }, [data, reviewKey]);
+        let active = true;
+        if (reportId) enterprise(`/assessment-reports/${reportId}/reviews`).then(result => {
+            if (!active) return;
+            setReviewLoadError('');
+            setServerReviews(result);
+            setReviewStates({ ...nextStates, ...Object.fromEntries(Object.entries(result.latest).map(([id, item]) => [id, item.status])) });
+        }).catch(error => { if (active) setReviewLoadError(error.message); });
+        return () => { active = false; };
+    }, [data, reviewKey, reportId]);
 
     const updateReviewState = (threatId, state) => {
         if (readOnly) return;
+        if (reportId) { setSelectedThreat((data?.threats || []).find(t => t.id === threatId)); return; }
         setReviewStates((prev) => {
             const next = { ...prev, [threatId]: state };
             saveAnnotations(reviewKey, { reviewStates: next });
@@ -228,16 +313,22 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, onRevi
     const localIntelligence = engineStatus.local_intelligence || {};
     const retrievalEngine = localIntelligence.retrieval_engine || {};
     const knowledgeAudit = engineStatus.knowledge_base?.quality_audit || {};
+    const knowledgeGovernance = engineStatus.knowledge_base?.governance;
     const qualityGate = engineStatus.quality_gate || {};
-    const publicationBlocked = qualityGate.publication_status === 'blocked' || qualityGate.status === 'blocked';
+    const extraction = diagramQuality(data);
+    const extractionIncomplete = !extraction.score_available;
+    const scoreAvailable = !extractionIncomplete && Number.isFinite(data.score);
+    const publicationBlocked = extractionIncomplete || qualityGate.publication_status === 'blocked' || qualityGate.status === 'blocked';
     const publicationLabel = publicationBlocked
-        ? 'Draft - model integrity check failed'
+        ? extractionIncomplete ? 'Draft - architecture extraction incomplete' : 'Draft - model integrity check failed'
         : qualityGate.publication_status === 'ready'
             ? 'Publication ready'
             : 'Technical review';
     const integrityViolations = qualityGate.integrity_violations || [];
     const completenessWarnings = qualityGate.completeness_warnings || [];
-    const diagramCoverage = selectedDiagram?.coverage || engineStatus.diagram_coverage;
+    const diagramCoverage = focusedView?.coverage || selectedDiagram?.coverage || engineStatus.diagram_coverage;
+    const componentNames = new Map((data.architecture?.components || []).map(c => [c.id, c.name]));
+    const selectedFlow = data.architecture?.flows?.find((flow, index) => flowKey(flow, index) === focusedFlow);
     const assumptions = data.coverage?.assumptions || [];
     const diffSummary = data.diff_summary;
     const followUpQuestions = data.follow_up_questions || [];
@@ -268,7 +359,7 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, onRevi
     // total they sit under and so could exceed it. They describe the same set.
     const criticalCount = confirmedThreats.filter((threat) => normalizeLabel(threat.severity) === 'critical').length;
     const highCount = confirmedThreats.filter((threat) => normalizeLabel(threat.severity) === 'high').length;
-    const mitigatedThreats = Object.values(reviewStates).filter((state) => state === 'mitigated' || state === 'accepted').length;
+    const mitigatedThreats = (data.threats || []).filter(threat => ['mitigated', 'accepted', 'verified_fixed', 'false_positive'].includes(reviewStates[threat.id])).length;
     const remediationPercent = data.threats?.length ? Math.round((mitigatedThreats / data.threats.length) * 100) : 0;
     const reviewSummary = (data.threats || []).reduce((summary, threat) => {
         const state = reviewStates[threat.id] || 'open';
@@ -288,8 +379,28 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, onRevi
     };
 
     const changeDiagramZoom = (delta) => {
-        setDiagramZoom((current) => Math.min(2.5, Math.max(0.5, Number((current + delta).toFixed(2)))));
+        const viewport = diagramViewportRef.current;
+        if (viewport) zoomAnchor.current = { left: viewport.scrollLeft + viewport.clientWidth / 2, top: viewport.scrollTop + viewport.clientHeight / 2,
+            zoom: diagramZoomRef.current, x: viewport.clientWidth / 2, y: viewport.clientHeight / 2 };
+        setDiagramZoom(current => clampDiagramZoom(current * (delta > 0 ? 1.25 : .8)));
     };
+
+    const fitDiagram = () => {
+        const svg = mermaidRef.current?.querySelector('svg'); const viewport = diagramViewportRef.current;
+        if (!svg || !viewport) return;
+        zoomAnchor.current = null;
+        setDiagramZoom(fitDiagramZoom(Number(svg.dataset.baseWidth), Number(svg.dataset.baseHeight), viewport.clientWidth - 48, viewport.clientHeight - 48));
+        viewport.scrollTo(0, 0);
+    };
+
+    const expandDiagram = async () => {
+        try {
+            if (document.fullscreenElement === diagramPanelRef.current) await document.exitFullscreen();
+            else await diagramPanelRef.current?.requestFullscreen();
+        } catch { toast.error('Full screen is unavailable in this browser. Flow and component focus remain available.'); }
+    };
+
+    const traceFlow = id => { setFocusedFlow(id); setFocusedComponent(''); setDiagramView('system'); setDiagramMode('diagram'); };
 
 
     const copyDiagramCode = async () => {
@@ -371,7 +482,9 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, onRevi
                 return;
             }
             const { default: html2canvas } = await import('html2canvas');
-            const canvas = await html2canvas(element);
+            const bounds = element.getBoundingClientRect();
+            const scale = Math.min(2, 8192 / Math.max(1, bounds.width), 8192 / Math.max(1, bounds.height), Math.sqrt(16000000 / Math.max(1, bounds.width * bounds.height)));
+            const canvas = await html2canvas(element, { scale, backgroundColor: darkMode ? '#18202c' : '#ffffff' });
             const link = document.createElement('a');
             link.download = `${projectName.replace(/\s+/g, '_')}_architecture.png`;
             link.href = canvas.toDataURL();
@@ -382,15 +495,15 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, onRevi
         }
     };
 
-    const handlePDFExport = async () => {
-        if (publicationBlocked) {
+    const handlePDFExport = async ({ draft = false } = {}) => {
+        if (publicationBlocked && !draft) {
             toast.error('Final report export is blocked until quality-gate failures are resolved.');
             return;
         }
         try {
             const { generateReport } = await import('../utils/pdfGenerator');
-            await generateReport(data, projectName, reviewStates);
-            toast.success('PDF report generated');
+            await generateReport({ ...data, risk_review: serverReviews }, projectName, reviewStates, { draft });
+            toast.success(draft ? 'Draft PDF generated' : 'PDF report generated');
         } catch {
             toast.error('Failed to generate PDF report');
         }
@@ -420,6 +533,7 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, onRevi
                             <span>{data.coverage?.analysis_mode || 'standard'} mode</span>
                             <span className="h-1 w-1 rounded-full bg-brand-300 dark:bg-brand-500" />
                             <span>{data.threats?.length || 0} findings</span>
+                            <span>{reportId ? `Questionnaire v${assessment.template_version} recorded` : 'Diagnostic / questionnaire not recorded'}</span>
                         </div>
                     </div>
 
@@ -444,6 +558,7 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, onRevi
                                 <span className="inline-flex items-center gap-2"><FileText className="h-4 w-4" /> Other formats</span>
                             </summary>
                             <div className="absolute right-0 z-20 mt-2 flex w-44 flex-col gap-1 rounded-md border border-slate-200 bg-white p-2 shadow-lg dark:border-brand-700 dark:bg-brand-800">
+                                {publicationBlocked && <button onClick={() => handlePDFExport({ draft: true })} className="rounded px-3 py-2 text-left text-sm text-brand-700 hover:bg-brand-50 dark:text-brand-200 dark:hover:bg-brand-700">Draft PDF</button>}
                                 <button onClick={downloadJSON} className="rounded px-3 py-2 text-left text-sm text-brand-700 hover:bg-brand-50 dark:text-brand-200 dark:hover:bg-brand-700">JSON</button>
                                 <button onClick={downloadCSV} className="rounded px-3 py-2 text-left text-sm text-brand-700 hover:bg-brand-50 dark:text-brand-200 dark:hover:bg-brand-700">CSV</button>
                                 {data.report_markdown && (
@@ -455,15 +570,22 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, onRevi
                 </div>
 
                 {activeView === 'overview' ? <div className="relative mt-6 grid gap-4 md:grid-cols-3">
-                    <MetricCard label="Security score" value={`${data.score}/100`} tone={data.score < 40 ? 'danger' : data.score < 70 ? 'warning' : 'success'} detail={data.score < 40 ? 'Immediate response recommended' : data.score < 70 ? 'Address top findings next' : 'Strong baseline with focused follow-up'} />
+                    <MetricCard label="Security score" value={scoreAvailable ? `${data.score}/100` : 'Not assessed'} tone={!scoreAvailable ? 'warning' : data.score < 40 ? 'danger' : data.score < 70 ? 'warning' : 'success'} detail={!scoreAvailable ? 'Architecture review required' : data.score < 40 ? 'Immediate response recommended' : data.score < 70 ? 'Address top findings next' : 'Strong baseline with focused follow-up'} />
                     <MetricCard label="Confirmed risks" value={confirmedCount} tone={criticalCount > 0 ? 'danger' : 'accent'} detail={`${criticalCount} critical, ${highCount} high`} />
                     <MetricCard label="Open questions" value={openQuestionCount} tone="warning" detail={openQuestionCount ? 'Answering these sharpens the model' : 'Architecture detail looks well covered'} />
                 </div> : <dl className="mt-5 flex flex-wrap gap-x-6 gap-y-2 text-xs text-brand-600 dark:text-brand-300">
-                    <div className="flex gap-2"><dt>Score</dt><dd className="font-semibold">{data.score}/100</dd></div>
+                    <div className="flex gap-2"><dt>Score</dt><dd className="font-semibold">{scoreAvailable ? `${data.score}/100` : 'Not assessed'}</dd></div>
                     <div className="flex gap-2"><dt>Confirmed</dt><dd className="font-semibold">{confirmedCount} ({criticalCount} critical, {highCount} high)</dd></div>
                     <div className="flex gap-2"><dt>Open questions</dt><dd className="font-semibold">{openQuestionCount}</dd></div>
                 </dl>}
             </section>
+
+            {extractionIncomplete && <section role="status" className="mt-4 border-l-4 border-amber-500 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:bg-amber-950/30 dark:text-amber-100">
+                <h2 className="font-semibold">Architecture extraction incomplete</h2>
+                <ul className="mt-1 list-disc pl-5">{extraction.reasons.map(reason => <li key={reason}>{reason}</li>)}</ul>
+                <p className="mt-2">Findings are provisional. The security score and final report are unavailable until the diagram is reviewed.</p>
+                {onReviewModel && <button type="button" className="ui-button-secondary mt-3" onClick={onReviewModel}><Pencil size={15} />Review architecture</button>}
+            </section>}
 
             <nav className="sticky top-[68px] z-30 mt-4 overflow-x-auto border-y border-brand-200 bg-white/95 py-2 backdrop-blur dark:border-brand-700 dark:bg-brand-900/95" aria-label="Analysis result views">
                 <div className="flex min-w-max gap-1">
@@ -497,7 +619,7 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, onRevi
                 <>
                     {(publicationBlocked || integrityViolations.length > 0) && (
                         <div className="mt-6 border-l-4 border-red-600 bg-white px-4 py-3 text-sm text-slate-700 dark:bg-red-950/20 dark:text-red-200">
-                            <p className="font-semibold text-red-700 dark:text-red-300">This report contradicts itself and cannot be published as final.</p>
+                            <p className="font-semibold text-red-700 dark:text-red-300">{extractionIncomplete ? 'Complete architecture review before publishing a final report.' : 'This report contradicts itself and cannot be published as final.'}</p>
                             <ul className="mt-1 list-disc space-y-0.5 pl-5">
                                 {integrityViolations.map((violation) => (
                                     <li key={violation.check}>{violation.detail} ({violation.count})</li>
@@ -522,30 +644,29 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, onRevi
             {activeView === 'overview' && <ReportOverview threats={allThreatsSorted} reviewStates={reviewStates} onSelect={setSelectedThreat} onOpenRegister={() => setActiveView('register')} onOpenAssurance={() => setActiveView('assurance')} evidenceRequests={evidenceRequests} />}
 
             {activeView === 'architecture' && <section className="mt-6">
-                <div className={clsx(insightCardBase, 'mx-auto w-full max-w-6xl p-6')}>
+                <div ref={diagramPanelRef} data-expanded={expandedDiagram} className={clsx(insightCardBase, 'mx-auto flex w-full min-w-0 flex-col p-4 sm:p-6', expandedDiagram ? 'h-full max-w-none overflow-y-auto rounded-none' : 'max-w-6xl')}>
                     <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                        <div className="text-center lg:text-left">
+                        <div className="min-w-0">
                             <h3 className="text-lg font-bold text-brand-950 dark:text-white">Architecture view</h3>
-                            {engineStatus.diagram_views?.length > 1 && <select aria-label="Architecture scope" className="input-brand mt-2 text-sm" value={diagramView} onChange={e => setDiagramView(e.target.value)}>{engineStatus.diagram_views.map(view => <option key={view.id} value={view.id}>{view.name}</option>)}</select>}
-                            <p className="mt-1 text-sm text-brand-600 dark:text-brand-400">Trust boundaries and boundary-crossing flows are highlighted directly on the modeled system map.</p>
+                            <div className="mt-2 flex gap-1" role="group" aria-label="Architecture display">{[['diagram', 'Diagram'], ['flows', 'Flow list']].map(([id, name]) => <button key={id} type="button" aria-pressed={diagramMode === id} className={`border-b-2 px-3 py-2 text-sm ${diagramMode === id ? 'border-brand-primary font-semibold' : 'border-transparent'}`} onClick={() => setDiagramMode(id)}>{name}</button>)}</div>
                         </div>
-                        <div className="flex items-center justify-center gap-2">
-                            <div className="flex items-center rounded-md border border-brand-200 bg-white dark:border-brand-700 dark:bg-brand-800">
+                        <div className="flex flex-wrap items-center gap-2">
+                            {diagramMode === 'diagram' && <div className="flex items-center rounded-md border border-brand-200 bg-white dark:border-brand-700 dark:bg-brand-800">
                                 <button
                                     type="button"
                                     onClick={() => changeDiagramZoom(-0.1)}
-                                    disabled={diagramZoom <= 0.5}
+                                    disabled={diagramZoom <= MIN_DIAGRAM_ZOOM}
                                     className="inline-flex h-9 w-9 items-center justify-center text-brand-600 hover:text-brand-primary disabled:cursor-not-allowed disabled:opacity-35 dark:text-brand-300"
                                     aria-label="Zoom out architecture diagram"
                                     title="Zoom out"
                                 >
                                     <ZoomOut className="h-4 w-4" />
                                 </button>
-                                <span className="w-12 text-center text-xs font-semibold text-brand-600 dark:text-brand-300">{Math.round(diagramZoom * 100)}%</span>
+                                <output aria-label="Architecture zoom" className="w-14 text-center text-xs font-semibold tabular-nums text-brand-600 dark:text-brand-300">{diagramZoom < .1 ? (diagramZoom * 100).toFixed(1) : Math.round(diagramZoom * 100)}%</output>
                                 <button
                                     type="button"
                                     onClick={() => changeDiagramZoom(0.1)}
-                                    disabled={diagramZoom >= 2.5}
+                                    disabled={diagramZoom >= MAX_DIAGRAM_ZOOM}
                                     className="inline-flex h-9 w-9 items-center justify-center text-brand-600 hover:text-brand-primary disabled:cursor-not-allowed disabled:opacity-35 dark:text-brand-300"
                                     aria-label="Zoom in architecture diagram"
                                     title="Zoom in"
@@ -554,17 +675,20 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, onRevi
                                 </button>
                                 <button
                                     type="button"
-                                    onClick={() => setDiagramZoom(1)}
+                                    onClick={fitDiagram}
                                     className="inline-flex h-9 w-9 items-center justify-center border-l border-brand-200 text-brand-600 hover:text-brand-primary dark:border-brand-700 dark:text-brand-300"
-                                    aria-label="Reset architecture diagram zoom"
-                                    title="Reset zoom"
+                                    aria-label="Fit architecture diagram"
+                                    title="Fit entire diagram"
                                 >
                                     <RotateCcw className="h-4 w-4" />
                                 </button>
-                            </div>
+                                <button type="button" className="inline-flex h-9 w-9 items-center justify-center border-l border-brand-200 dark:border-brand-700" aria-label="Actual diagram size" title="Actual size (100%)" onClick={() => { zoomAnchor.current = null; setDiagramZoom(1); }}><Focus size={16} /></button>
+                            </div>}
+                            <button type="button" className="ui-button-secondary p-2" aria-label={expandedDiagram ? 'Exit full screen architecture' : 'Expand architecture'} title={expandedDiagram ? 'Exit full screen' : 'Full screen'} onClick={expandDiagram}>{expandedDiagram ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button>
                             <button
                                 onClick={copyDiagramCode}
                                 className="ui-button-secondary px-3 py-2 text-xs"
+                                disabled={diagramMode !== 'diagram' || !!diagramError}
                             >
                                 <span className="inline-flex items-center gap-1.5">
                                     {copiedDiagram ? <ClipboardCheck className="h-3.5 w-3.5 text-green-600" /> : <Copy className="h-3.5 w-3.5" />}
@@ -574,32 +698,52 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, onRevi
                             <button
                                 onClick={exportDiagramAsPNG}
                                 className="ui-button-secondary px-3 py-2 text-xs"
+                                disabled={diagramMode !== 'diagram' || !!diagramError}
                             >
                                 <span className="inline-flex items-center gap-1.5"><Download className="h-3.5 w-3.5" /> PNG</span>
                             </button>
                         </div>
                     </div>
-                    <div
+                    {diagramMode === 'diagram' && <div className="mt-4 grid min-w-0 gap-3 sm:grid-cols-3">
+                        <label className="min-w-0 text-xs">Architecture scope<select aria-label="Architecture scope" className="input-brand mt-1 w-full min-w-0 text-sm" value={diagramView} onChange={e => { setDiagramView(e.target.value); setFocusedComponent(''); setFocusedFlow(''); }}>
+                            {engineStatus.diagram_views?.length ? engineStatus.diagram_views.map(view => <option key={view.id} value={view.id}>{view.name}</option>) : <option value="system">System</option>}
+                        </select></label>
+                        <label className="min-w-0 text-xs">Component and connected flows<select aria-label="Focus architecture component" className="input-brand mt-1 w-full min-w-0 text-sm" value={focusedComponent} onChange={e => { setFocusedComponent(e.target.value); setFocusedFlow(''); setDiagramView('system'); }}><option value="">All components</option>{data.architecture?.components?.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
+                        <label className="min-w-0 text-xs">Trace a flow<select aria-label="Trace DFD flow" className="input-brand mt-1 w-full min-w-0 text-sm" value={focusedFlow} onChange={e => traceFlow(e.target.value)}><option value="">All flows</option>{data.architecture?.flows?.map((flow, index) => <option key={flowKey(flow, index)} value={flowKey(flow, index)}>{flow.flow_number || `Flow ${index + 1}`}: {componentNames.get(flow.source_id) || flow.source_id} to {componentNames.get(flow.target_id) || flow.target_id}</option>)}</select></label>
+                    </div>}
+                    {diagramMode === 'flows' ? <ArchitectureFlowTable architecture={data.architecture} onSelect={traceFlow} /> : <><div
                         ref={diagramViewportRef}
-                        className="architecture-diagram mt-5 flex h-[480px] max-h-[65vh] min-h-[280px] w-full cursor-grab items-start justify-start overflow-auto rounded-md border border-slate-200 bg-white p-4 active:cursor-grabbing dark:border-brand-700 dark:bg-brand-900/55 sm:p-6"
+                        className={clsx('architecture-diagram mt-4 w-full min-w-0 cursor-grab overflow-auto rounded-md border border-slate-200 bg-white p-4 active:cursor-grabbing dark:border-brand-700 dark:bg-brand-900 sm:p-6', expandedDiagram ? 'min-h-[280px] flex-1' : 'h-[560px] max-h-[70vh] min-h-[320px]')}
                         aria-label="Architecture diagram. Use the mouse wheel or zoom controls to change scale."
                     >
-                        <div ref={mermaidRef} className="flex min-h-full min-w-full w-max shrink-0 items-start justify-center" />
+                        {diagramError && <p role="alert" className="text-sm">{diagramError}</p>}
+                        <div ref={mermaidRef} hidden={!!diagramError} className="min-h-full w-max min-w-full" />
                     </div>
-                </div>
-
-                {diagramCoverage && (
+                    {diagramCoverage && (
                     <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">
+                        {focusedView && 'Focused view: '}
                         {diagramCoverage.components_drawn} of {diagramCoverage.components_in_model} components and{' '}
                         {diagramCoverage.flows_drawn} of {diagramCoverage.flows_in_model} data flows are drawn.
+                        {!!diagramCoverage.relationships_drawn && <> {diagramCoverage.relationships_drawn} separate relationship candidates are shown without flow arrows.</>}
+                        {!!diagramCoverage.deployment_groups_drawn && <> Solid containers show deployment groups, not verified trust boundaries.</>}
                         {diagramCoverage.components_hidden_for_readability > 0 &&
-                            ` ${diagramCoverage.components_hidden_for_readability} components are summarised for readability.`}
+                            ` ${diagramCoverage.components_hidden_for_readability} additional components exceed the diagram limit; the model and flow list are unchanged.`}
+                        {diagramCoverage.flows_hidden_for_readability > 0 &&
+                            ` ${diagramCoverage.flows_hidden_for_readability} additional flows are outside this diagram.`}
                         {diagramCoverage.components_excluded_as_non_flow > 0 &&
                             ` ${diagramCoverage.components_excluded_as_non_flow} components take no part in a data flow.`}
                         {' '}A dotted flow was assumed from component types rather than described; a bold red
                         outline marks a component with a confirmed finding.
                     </p>
-                )}
+                    )}
+                    {selectedFlow && <section aria-label="Selected data flow" className="mt-4 border-t border-brand-200 pt-3 text-sm dark:border-brand-700">
+                        <h4 className="break-words font-semibold">{selectedFlow.flow_number || 'Selected flow'}: {componentNames.get(selectedFlow.source_id) || selectedFlow.source_id} to {componentNames.get(selectedFlow.target_id) || selectedFlow.target_id}</h4>
+                        {selectedFlow.description && <p className="mt-2 break-words">{selectedFlow.description}</p>}
+                        <p className="mt-2 break-words text-xs">{selectedFlow.protocol || 'Unknown protocol'} / {selectedFlow.data_type || 'Unspecified data'} / {isAssumedFlow(selectedFlow) ? 'Assumed connection' : 'Not marked assumed'}</p>
+                        {!!selectedFlow.evidence?.length && <details className="mt-2 text-xs"><summary className="cursor-pointer font-medium">Flow evidence ({selectedFlow.evidence.length})</summary>{selectedFlow.evidence.map((entry, index) => <p key={index} className="mt-2 break-words">{[entry.document || entry.source_ref, entry.line && `line ${entry.line}`, entry.statement].filter(Boolean).join(': ')}</p>)}</details>}
+                    </section>}
+                    </>}
+                </div>
 
                 <AnalystWorkbench
                     data={data}
@@ -621,11 +765,24 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, onRevi
                 )}
             </section>}
 
+            {activeView === 'architecture' && focusedFlow && <section className="my-4 border-y border-brand-200 py-4 dark:border-brand-700"><h3 className="text-sm font-semibold">Risks linked to {selectedFlow?.flow_number || 'selected flow'}</h3>
+                {(data.threats || []).filter(threat => threat.affected_flow_refs?.some(flow => flow.id === focusedFlow)).map(threat => <button type="button" key={threat.id} className="mt-2 block text-left text-sm text-brand-primary underline dark:text-indigo-300" onClick={() => setSelectedThreat(threat)}>{threat.title}</button>)}
+                {!(data.threats || []).some(threat => threat.affected_flow_refs?.some(flow => flow.id === focusedFlow)) && <p className="mt-2 text-xs">No flow-specific findings are linked. Component-level findings remain in the risk register.</p>}
+            </section>}
             {activeView === 'register' && <section className="mt-8">
+                {reportId && <div className="mb-4 flex justify-end gap-2">{['csv', 'json'].map(format => <button key={format} className="ui-button-secondary" type="button" onClick={async () => {
+                    try {
+                        const token = sessionStorage.getItem('aegis-workspace-token');
+                        const response = await fetch(`${API_BASE_URL}/enterprise/assessment-reports/${reportId}/register/${format}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+                        if (!response.ok) throw new Error('Register export failed.');
+                        const url = URL.createObjectURL(await response.blob()); const link = document.createElement('a'); link.href = url; link.download = `risk-register.${format}`; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+                    } catch (error) { toast.error(error.message); }
+                }}><Download size={16} />{format.toUpperCase()}</button>)}</div>}
                 <FindingsWorkspace threats={data.threats || []} filters={filters} onFiltersChange={setFilters} reviewStates={reviewStates} onSelectThreat={setSelectedThreat} />
             </section>}
 
             {activeView === 'assurance' && <section className="mt-8 space-y-4">
+                <SecurityReports assessment={assessment} architecture={data.architecture} readOnly={readOnly}>
                 <AssuranceEvidence status={engineStatus} threats={allThreatsSorted} onSelect={setSelectedThreat} onClarify={onClarify} />
                 <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Supporting detail</h2>
 
@@ -670,7 +827,7 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, onRevi
 
                 <DetailSection
                     title="What was modeled and assessed"
-                    summary={`${data.coverage?.components_analyzed ?? 0} components, ${strideCoverage.assessment_percent ?? 100}% STRIDE assessed`}
+                    summary={`${data.coverage?.components_analyzed ?? 0} components, ${strideCoverage.assessment_percent == null ? 'STRIDE assessment unavailable' : `${strideCoverage.assessment_percent}% STRIDE assessed`}`}
                 >
                     <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-3">
                         {[
@@ -692,9 +849,15 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, onRevi
                         ))}
                     </div>
                     <p className="mt-5 text-sm text-brand-600 dark:text-brand-400">
-                        Every modeled element is assessed against all six STRIDE categories.
+                        STRIDE assessment covers modeled elements and implemented control checks, not every possible vulnerability.
                         {' '}{strideCoverage.unknown_cells ?? 0} cells are unresolved for lack of architecture evidence.
                     </p>
+                    {engineStatus.reasoning_assurance && <dl className="mt-4 grid gap-3 border-y border-brand-200 py-4 text-sm dark:border-brand-700 sm:grid-cols-3">
+                        <div><dt className="text-xs text-brand-500 dark:text-brand-300">Evidence-resolved assessments</dt><dd className="mt-1 font-semibold">{engineStatus.reasoning_assurance.evidence_resolved_cells} / {engineStatus.reasoning_assurance.applicable_cells}</dd></div>
+                        <div><dt className="text-xs text-brand-500 dark:text-brand-300">Unresolved assessments</dt><dd className="mt-1 font-semibold">{engineStatus.reasoning_assurance.unresolved_cells}</dd></div>
+                        <div><dt className="text-xs text-brand-500 dark:text-brand-300">Assumed data flows</dt><dd className="mt-1 font-semibold">{engineStatus.reasoning_assurance.assumed_flows}</dd></div>
+                    </dl>}
+                    {!!data.attack_chains?.hypothesis_count && <p className="mt-3 text-sm text-amber-800 dark:text-amber-200">{data.attack_chains.hypothesis_count} inferred attack routes require review and are excluded from evidence-backed path counts.</p>}
                     <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                         {(strideCoverage.categories || []).map((category) => {
                             const summary = strideCoverage.category_summary?.[category] || {};
@@ -709,6 +872,18 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, onRevi
                         })}
                     </div>
                 </DetailSection>
+
+                {knowledgeGovernance && <DetailSection title="Knowledge coverage" summary={`${knowledgeGovernance.counts?.executable || 0} executable checks; ${knowledgeGovernance.counts?.retrieval_only || 0} retrieval-only references`}>
+                    <dl className="grid gap-4 text-sm sm:grid-cols-2">
+                        {[
+                            ['Rules with test contracts', knowledgeGovernance.counts?.contract_testable || 0],
+                            ['Quarantined rules', knowledgeGovernance.quarantined?.length || 0],
+                            ['Rules awaiting independent review', knowledgeGovernance.counts?.independent_review_not_recorded || 0],
+                            ['Rules without a primary reference', knowledgeGovernance.counts?.missing_primary_reference || 0],
+                        ].map(([name, value]) => <div key={name} className="border-b border-brand-200 py-2 dark:border-brand-700"><dt className="text-brand-600 dark:text-brand-300">{name}</dt><dd className="mt-1 font-semibold text-brand-950 dark:text-white">{value}</dd></div>)}
+                    </dl>
+                    <p className="mt-4 text-sm text-brand-600 dark:text-brand-300">Automated rule tests do not establish independent accuracy or complete threat coverage.</p>
+                </DetailSection>}
 
                 {Object.keys(retrievalEngine).length > 0 && (
                     <DetailSection
@@ -782,6 +957,7 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, onRevi
                     annotationScope={reviewKey}
                     readOnly={readOnly}
                 />
+                </SecurityReports>
             </section>}
 
             {activeView === 'report' && (
@@ -872,9 +1048,17 @@ export default function ThreatDashboard({ data, projectName, onReanalyze, onRevi
             <RiskDetailsModal
                 threat={selectedThreat}
                 reviewState={selectedThreat ? reviewStates[selectedThreat.id] || 'open' : 'open'}
-                onReviewStateChange={readOnly ? undefined : updateReviewState}
+                onReviewStateChange={readOnly || reportId ? undefined : updateReviewState}
                 onClose={() => setSelectedThreat(null)}
-            />
+                onFlowSelect={id => { setSelectedThreat(null); traceFlow(id); setActiveView('architecture'); }}
+            >
+                {reviewLoadError && <p role="alert" className="p-5 text-sm text-red-700 dark:text-red-300">Review history unavailable: {reviewLoadError}</p>}
+                {reportId && selectedThreat && <RiskReviewForm key={`${reportId}:${selectedThreat.id}:${serverReviews.latest[selectedThreat.id]?.version || 0}`} reportId={reportId} threat={selectedThreat} review={serverReviews.latest[selectedThreat.id]} events={serverReviews.events} readOnly={readOnly || !!reviewLoadError} onSaved={result => {
+                    setServerReviews(result);
+                    const states = { ...reviewStates, ...Object.fromEntries(Object.entries(result.latest).map(([id, item]) => [id, item.status])) };
+                    setReviewStates(states); saveAnnotations(reviewKey, { reviewStates: states });
+                }} />}
+            </RiskDetailsModal>
         </div>
     );
 }

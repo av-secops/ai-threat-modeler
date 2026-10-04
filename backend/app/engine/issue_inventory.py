@@ -65,6 +65,25 @@ def dispositions(architecture, threats):
             scope = _scope(item['statement'], documents.get(filename, {}))
             identifier = issue_id(item['statement'] + str(sorted(scope.items())) + filename)
             entries[identifier] = {**item, **citation, 'id': identifier, 'scope': scope, 'document': filename}
+    # Ordinary prose weaknesses participate in the same final accounting as
+    # headings and tables. Preserve each source, not just each sentence string.
+    from . import source_index
+    index = source_index.build(metadata.get('source_text') or metadata.get('architecture_text') or '')
+    for component in components.values():
+        for weakness in component.properties.get('stated_weaknesses', []):
+            statement = str(weakness.get('statement') or '').strip(' \t.;')
+            if not statement:
+                continue
+            citation = index.find(statement)
+            cite = citation.as_dict() if citation else {}
+            filename = cite.get('document', '')
+            scope = _scope(statement, documents.get(filename, {}))
+            if any(item['statement'].strip(' \t.;').casefold() == statement.casefold()
+                   and (not filename or item.get('document') == filename) for item in entries.values()):
+                continue
+            identifier = issue_id(statement + str(sorted(scope.items())) + filename)
+            entries[identifier] = {'id': identifier, 'statement': statement, 'scope': scope,
+                'document': filename, 'component': component.id, 'basis': 'stated_weakness', **cite}
     source_statements = {item['statement'].casefold() for item in entries.values()}
     for item in metadata.get('known_issues') or []:
         statement = item.get('description', '')
@@ -73,7 +92,15 @@ def dispositions(architecture, threats):
     rows = []
     for entry in entries.values():
         mentions = find_mentions(entry['statement'], aliases)
-        subject = mentions[0][2] if mentions else None
+        subject = entry.get('component') or (mentions[0][2] if mentions else None)
+        resolved_issue = next((item for item in metadata.get('known_issues') or []
+            if str(item.get('description', '')).strip(' \t.;').casefold() == entry['statement'].strip(' \t.;').casefold()
+            and item.get('component_resolution') in {'stated_callback_receiver', 'named_subject', 'explicit_subject'}), None)
+        if resolved_issue:
+            targets = [identifier for identifier in resolved_issue.get('component_hints', []) if identifier in components]
+            if len(targets) == 1:
+                subject = targets[0]
+                entry['subject_resolution'] = resolved_issue['component_resolution']
         entry['component'] = subject
         out_of_scope = bool(subject and not _applicable(entry['scope'], components[subject]))
         expected = classify_generic_weaknesses(entry['statement'])
@@ -94,6 +121,9 @@ def dispositions(architecture, threats):
             for e in t.evidence_details)]
         rows.append({**entry, 'finding_ids': [t.id for t in matching],
             'status': 'out_of_scope' if out_of_scope else 'reported' if matching else 'needs_review',
+            'disposition': 'excluded' if out_of_scope else 'merged' if matching and any(
+                len((t.explanation or {}).get('merged_finding_ids', [])) > 1 for t in matching)
+                else 'included' if matching else 'needs_clarification',
             'reason': 'Source scope does not match the modeled component.' if out_of_scope else 'Source statement retained in finding evidence.' if matching else 'No scoped finding preserves this declared source issue. Review extraction, scope or deduplication.'})
     return {'issues': rows, 'declared': len(rows), 'reported': sum(r['status'] == 'reported' for r in rows),
         'out_of_scope': sum(r['status'] == 'out_of_scope' for r in rows),

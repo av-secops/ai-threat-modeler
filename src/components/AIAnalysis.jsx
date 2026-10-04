@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { AlertCircle, CheckCircle2, Key, Loader2, RefreshCw, Sparkles, X } from 'lucide-react';
 import { useToast } from '../hooks/useToast';
 import { API_BASE_URL } from '../config';
+import { workspaceAuthHeaders } from '../services/workspaceAuth';
 
 const DEFAULT_PROVIDERS = [
     {
@@ -68,7 +69,7 @@ const AIAnalysis = ({ onAnalysisComplete }) => {
         const loadProviders = async () => {
             setIsLoadingProviders(true);
             try {
-                const response = await fetch(`${API_BASE_URL}/llm/providers`);
+                const response = await fetch(`${API_BASE_URL}/llm/providers`, { headers: workspaceAuthHeaders() });
                 if (!response.ok) throw new Error('Provider loading failed');
                 const payload = await response.json();
                 if (Array.isArray(payload.providers) && payload.providers.length) {
@@ -118,7 +119,7 @@ const AIAnalysis = ({ onAnalysisComplete }) => {
         try {
             const response = await fetch(`${API_BASE_URL}/llm/models`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', ...workspaceAuthHeaders() },
                 body: JSON.stringify({ provider, api_key: apiKey }),
             });
 
@@ -164,7 +165,7 @@ const AIAnalysis = ({ onAnalysisComplete }) => {
         try {
             const response = await fetch(`${API_BASE_URL}/analyze-with-llm`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', ...workspaceAuthHeaders() },
                 body: JSON.stringify({
                     project_name: projectName,
                     description,

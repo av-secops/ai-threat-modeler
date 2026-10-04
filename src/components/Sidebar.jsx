@@ -1,8 +1,8 @@
 import React from 'react';
-import { Shield, Zap, Sparkles, Clock, Moon, Sun, ChevronLeft, ChevronRight, FileCode2 } from 'lucide-react';
+import { Shield, Zap, Sparkles, Clock, Moon, Sun, PanelLeftClose, PanelLeftOpen, FileCode2, FolderOpen } from 'lucide-react';
 
 const navItems = [
-  { id: 'products', label: 'Products', icon: FileCode2 },
+  { id: 'products', label: 'Products', icon: FolderOpen },
   { id: 'static', label: 'Static Analysis', icon: Zap },
   { id: 'code', label: 'Code Security', icon: FileCode2 },
   { id: 'iac', label: 'IaC Analysis', icon: Shield },
@@ -13,6 +13,7 @@ const navItems = [
 export default function Sidebar({ activeTab, onTabChange, darkMode, onToggleDarkMode, collapsed, onCollapsedChange }) {
   return (
     <aside
+      onKeyDown={event => { if (event.key === 'Escape' && !collapsed) onCollapsedChange(true); }}
       className={`
         fixed left-0 top-0 z-50 flex h-screen flex-col items-center
         transition-all duration-300 ease-in-out
@@ -23,26 +24,40 @@ export default function Sidebar({ activeTab, onTabChange, darkMode, onToggleDark
     >
       <div
         className={`
-          flex w-full items-center gap-3 px-4 pb-4 pt-5
-          ${collapsed ? 'justify-center' : 'justify-start'}
+          flex h-20 w-full shrink-0 items-center gap-2 px-3
+          ${collapsed ? 'justify-center' : 'justify-between'}
         `}
       >
-        <div className="relative flex-shrink-0 cursor-pointer">
-          <div className="relative flex h-10 w-10 items-center justify-center rounded-lg bg-brand-primary shadow-sm">
-            <Shield className="h-5 w-5 text-white" />
-          </div>
-        </div>
         {!collapsed && (
-          <div className="overflow-hidden animate-fade-in-up">
-            <h1 className="whitespace-nowrap text-lg font-semibold tracking-tight text-brand-950 dark:text-white">Aegis Threat</h1>
-            <p className="mt-0.5 text-[10px] font-medium uppercase tracking-wide text-brand-500 dark:text-brand-400">Threat Modeling</p>
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-brand-primary shadow-sm">
+              <Shield className="h-4 w-4 text-white" aria-hidden="true" />
+            </div>
+            <div className="min-w-0">
+              <p className="whitespace-nowrap text-sm font-semibold text-brand-950 dark:text-white">Aegis Threat</p>
+              <p className="mt-0.5 whitespace-nowrap text-[10px] text-brand-500 dark:text-brand-400">Threat Modeling</p>
+            </div>
           </div>
         )}
+        <button
+          type="button"
+          onClick={() => onCollapsedChange(!collapsed)}
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          aria-expanded={!collapsed}
+          aria-controls="main-navigation"
+          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          className="group relative flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-brand-500 transition-colors hover:bg-brand-100 hover:text-brand-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-primary dark:text-brand-300 dark:hover:bg-brand-800 dark:hover:text-white"
+        >
+          {collapsed ? <PanelLeftOpen size={20} aria-hidden="true" /> : <PanelLeftClose size={20} aria-hidden="true" />}
+          <span aria-hidden="true" className="pointer-events-none invisible absolute left-full z-50 ml-3 whitespace-nowrap rounded-md bg-brand-900 px-3 py-1.5 text-xs font-medium text-white opacity-0 shadow-lg group-hover:visible group-hover:opacity-100 group-focus-visible:visible group-focus-visible:opacity-100 dark:bg-brand-100 dark:text-brand-900">
+            {collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          </span>
+        </button>
       </div>
 
       <div className={`mb-3 h-px bg-brand-200 dark:bg-brand-700 ${collapsed ? 'w-8' : 'w-[calc(100%-2rem)]'}`} />
 
-      <nav className="flex w-full flex-1 flex-col gap-1 px-2">
+      <nav id="main-navigation" aria-label="Main navigation" className="flex w-full flex-1 flex-col gap-1 px-2">
         {navItems.map((item) => {
           const Icon = item.icon;
           const isActive = activeTab === item.id;
@@ -50,6 +65,8 @@ export default function Sidebar({ activeTab, onTabChange, darkMode, onToggleDark
           return (
             <button
               key={item.id}
+              aria-label={item.label}
+              aria-current={isActive ? 'page' : undefined}
               onClick={() => onTabChange(item.id)}
               title={collapsed ? item.label : undefined}
               className={`
@@ -103,6 +120,7 @@ export default function Sidebar({ activeTab, onTabChange, darkMode, onToggleDark
 
         <button
           onClick={onToggleDarkMode}
+          aria-label={darkMode ? 'Light mode' : 'Dark mode'}
           title={collapsed ? (darkMode ? 'Light mode' : 'Dark mode') : undefined}
           className={`
             group relative flex w-full items-center gap-3 rounded-lg transition-colors duration-150
@@ -120,24 +138,6 @@ export default function Sidebar({ activeTab, onTabChange, darkMode, onToggleDark
           )}
         </button>
 
-        <button
-          onClick={() => onCollapsedChange(!collapsed)}
-          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          className={`
-            group relative flex w-full items-center gap-3 rounded-lg transition-colors duration-150
-            ${collapsed ? 'justify-center px-0 py-3' : 'px-3.5 py-2.5'}
-            hover:bg-brand-50 dark:hover:bg-brand-800/60
-          `}
-        >
-          {collapsed
-            ? <ChevronRight className="h-5 w-5 text-brand-400 transition-colors group-hover:text-brand-600 dark:group-hover:text-brand-200" />
-            : <ChevronLeft className="h-5 w-5 text-brand-400 transition-colors group-hover:text-brand-600 dark:group-hover:text-brand-200" />}
-          {!collapsed && (
-            <span className="whitespace-nowrap text-sm font-medium text-brand-600 dark:text-brand-400">
-              Collapse
-            </span>
-          )}
-        </button>
       </div>
     </aside>
   );

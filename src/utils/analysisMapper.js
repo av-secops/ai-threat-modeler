@@ -1,8 +1,12 @@
+import { diagramQuality } from './diagramQuality';
+
 export function mapAnalysisResult(result) {
+  const quality = diagramQuality(result);
+  const names = new Map((result.architecture?.components || []).map(c => [c.id, c.name]));
   return {
     summary: result.summary,
     projectName: result.project_name,
-    score: result.score,
+    score: quality.score_available ? result.score : null,
     architecture: result.architecture,
     timestamp: new Date().toLocaleString(),
     threats: (result.threats || []).map((t) => ({
@@ -21,6 +25,9 @@ export function mapAnalysisResult(result) {
       confidence: t.confidence || 'Medium',
       tier: t.tier || 'Potential',
       status: t.status || 'Identified',
+      review_status: t.review_status || 'pending_review',
+      affected_flow_refs: t.affected_flow_refs || [],
+      flow_reference_status: t.flow_reference_status || 'not_flow_specific',
       evidence: t.evidence || [],
       evidence_details: t.evidence_details || [],
       finding_type: t.finding_type || 'architecture',
@@ -52,7 +59,7 @@ export function mapAnalysisResult(result) {
       affected_assets: t.affected_assets || [],
       component_id: t.component_id,
       mapped_controls: t.mapped_controls || null,
-      explanation: t.explanation || {},
+      explanation: { ...t.explanation, impacted_components: (t.affected_components?.length ? t.affected_components : [t.component_id || t.affected_component || t.component].filter(Boolean)).map(id => names.get(id) || id) },
       review_state: t.review_state || 'open',
     })),
     diagram: result.mermaid_diagram || 'graph LR; Error[No Diagram Generated];',
@@ -73,7 +80,8 @@ export function mapAnalysisResult(result) {
     finding_groups: result.finding_groups || {},
     risk_methodology: result.risk_methodology || null,
     stride_coverage: result.stride_coverage || null,
-    engine_status: result.engine_status || null,
+    engine_status: { ...result.engine_status, diagram_quality: quality,
+      ...(!quality.score_available ? { quality_gate: { ...result.engine_status?.quality_gate, status: 'blocked', publication_status: 'blocked', extraction_status: 'incomplete' } } : {}) },
     architecture_validation: result.architecture_validation || null,
   };
 }

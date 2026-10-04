@@ -1,0 +1,9 @@
+<mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/>
+<mxCell id="az" value="Tenant A trust boundary" vertex="1" parent="1" style="swimlane;"/>
+<mxCell id="bz" value="Tenant B trust boundary" vertex="1" parent="1" style="swimlane;"/>
+<mxCell id="a" value="Orders API" vertex="1" parent="az"/>
+<mxCell id="b" value="Orders API" vertex="1" parent="bz"/>
+<mxCell id="cache" value="Redis" vertex="1" parent="az"/>
+<mxCell id="e" edge="1" source="a" target="cache" value="TLS cache lookup"/>
+<mxCell id="dependency" edge="1" source="a" target="b" value="depends on"/>
+</root></mxGraphModel>

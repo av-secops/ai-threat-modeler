@@ -4,6 +4,9 @@ import argparse
 import cProfile
 import json
 import os
+import platform
+import math
+import statistics
 from pathlib import Path
 import sys
 from time import perf_counter
@@ -62,13 +65,41 @@ KNOWN ISSUES:
 - The payments API does not verify webhook signatures.""",
 }
 
+SCENARIOS.update({
+    'mfa_present': 'The admin portal calls the management API over HTTPS. The admin portal enforces multi-factor authentication.',
+    'mfa_absent': 'The admin portal calls the management API over HTTPS. The admin portal has no multi-factor authentication.',
+    'rate_limit_present': 'React calls the Orders API over HTTPS. Orders API enforces rate limiting.',
+    'rate_limit_absent': 'React calls the Orders API over HTTPS. Orders API has no rate limiting.',
+    'endpoint_exception': 'React calls Orders API over HTTPS. Orders API enforces rate limiting. Orders API has no rate limiting on /export.',
+    'document_control': 'Document: prompt.txt\nType: txt\nContent:\nReact calls Orders API over HTTPS.\n\n---\nDocument: controls.pdf\nType: pdf\nContent:\n[Page 2]\nOrders API enforces rate limiting and validates input.',
+    'conflicting_controls': 'Orders API stores orders in PostgreSQL.\nKnown issues:\n- Orders API has no rate limiting.\nControls:\nOrders API enforces rate limiting.',
+    'planned_controls': 'React calls Orders API over HTTPS. Orders API will implement rate limiting. PostgreSQL encryption at rest is planned.',
+    'tenant_isolation': 'A multi-tenant SaaS uses an Orders API and PostgreSQL. Orders API enforces object-level authorization and tenant isolation. PostgreSQL uses row-level security.',
+    'tenant_weakness': 'A multi-tenant SaaS uses an Orders API and PostgreSQL.\nKnown issues:\n- Orders API trusts tenant identifiers from requests without checking the authenticated tenant.',
+    'control_verbs': 'React calls Orders API over HTTPS. Orders API stores records in PostgreSQL. KMS encrypts database storage. Rate limits protect API gateway.',
+    'async_workflow': 'Orders API publishes billing events to Kafka over TLS. Billing worker consumes Kafka and stores invoices in PostgreSQL.\nKnown issues:\n- Billing worker does not validate tenant identifiers on consumed messages.',
+})
+
+
+def scale_scenario(size):
+    components = '\n'.join(f'Row {i + 1}: C{i} | Service {i:03d} | Node.js API | Internal tenant record processing' for i in range(1, size + 1))
+    flows = '\n'.join(f'Row {i + 1}: F{i} | C{i} -> C{i + 1} | HTTPS | Tenant records' for i in range(1, size))
+    return (f'Document: scale-{size}.txt\nType: txt\nRole: source_design\nContent:\n'
+        f'[Table 1]\nRow 1: ID | Component | Technology | Responsibility / Data\n{components}\n\n'
+        f'[Table 2]\nRow 1: ID | Source and destination | Protocol | Data\n{flows}\n')
+
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--profile", type=Path)
     parser.add_argument("--local-ai", action="store_true")
+    parser.add_argument("--repeats", type=int, default=1, help="1-50 runs per scenario; separates first-run and warm samples.")
+    parser.add_argument("--scale", action="store_true", help="Also exercise explicit 10/50/200-component synthetic chain models.")
+    parser.add_argument("--compare", type=Path, help="Earlier probe report from the same hardware and configuration.")
     args = parser.parse_args()
+    if not 1 <= args.repeats <= 50:
+        parser.error('--repeats must be between 1 and 50')
     from app.engine.analyzer import ThreatAnalyzer
 
     profile = cProfile.Profile()
@@ -78,7 +109,10 @@ def main():
     analyzer = ThreatAnalyzer()
     initialization = perf_counter() - started
     outputs = []
-    for name, description in SCENARIOS.items():
+    scenarios = dict(SCENARIOS)
+    if args.scale:
+        scenarios.update({f'scale_{size}': scale_scenario(size) for size in (10, 50, 200)})
+    for name, description in scenarios.items():
         phases = []
         started = perf_counter()
         result = analyzer.analyze_from_text(
@@ -92,9 +126,20 @@ def main():
             for (phase, begin), (_, end) in zip(phases, endpoints)
         }
         data = result.model_dump()
+        warm_ms, digests = [], {result.engine_status.get('analysis_manifest', {}).get('semantic_output_digest')}
+        for _ in range(args.repeats - 1):
+            repeat_started = perf_counter()
+            repeated = analyzer.analyze_from_text(description, name, use_local_slm=args.local_ai)
+            warm_ms.append(round((perf_counter() - repeat_started) * 1000, 2))
+            digests.add(repeated.engine_status.get('analysis_manifest', {}).get('semantic_output_digest'))
         outputs.append({"scenario": name, "input": description,
+                        "review_status": "engineering_probe_not_independently_reviewed",
                         "elapsed_ms": round((finished - started) * 1000, 2),
-                        "phase_ms": phase_ms, "result": data})
+                        "phase_ms": phase_ms, "result": data,
+                        "warm_samples_ms": warm_ms,
+                        "warm_p50_ms": statistics.median(warm_ms) if warm_ms else None,
+                        "warm_p95_ms": sorted(warm_ms)[math.ceil(len(warm_ms) * .95) - 1] if warm_ms else None,
+                        "repeated_semantics_stable": len(digests) == 1 if args.repeats > 1 else None})
         print(json.dumps({"scenario": name, "ms": outputs[-1]["elapsed_ms"],
                           "components": len(result.architecture.components),
                           "findings": len(result.threats),
@@ -105,9 +150,28 @@ def main():
         args.profile.parent.mkdir(parents=True, exist_ok=True)
         profile.dump_stats(str(args.profile))
     args.output.parent.mkdir(parents=True, exist_ok=True)
+    comparison = []
+    if args.compare:
+        previous = {row['scenario']: row for row in json.loads(args.compare.read_text(encoding='utf-8'))['scenarios']}
+        for current in outputs:
+            old = previous.get(current['scenario'])
+            if not old or old.get('input') != current['input']:
+                continue
+            before = {t['id']: t for t in old['result']['threats']}
+            after = {t['id']: t for t in current['result']['threats']}
+            comparison.append({'scenario': current['scenario'], 'added': sorted(after.keys() - before.keys()),
+                'removed': sorted(before.keys() - after.keys()),
+                'changed': sorted(key for key in before.keys() & after.keys() if any(
+                    before[key].get(field) != after[key].get(field) for field in ('severity', 'tier', 'affected_components', 'evidence_details'))),
+                'latency_ratio': current['elapsed_ms'] / old['elapsed_ms'] if old.get('elapsed_ms') else None})
     args.output.write_text(json.dumps({
         "scope": "Development probes, not independent accuracy validation",
+        "corpus_version": "analysis-quality-probes-1", "independent_acceptance": "pending_reviewed_corpus",
+        "comparison": comparison,
         "local_ai_enabled": args.local_ai,
+        "run_configuration": {"python": platform.python_version(), "platform": platform.platform(),
+            "machine": platform.machine(), "logical_cpus": os.cpu_count(), "repeats": args.repeats,
+            "timing_scope": "First call per scenario followed by shared-process warm runs; not isolated cold model-start benchmarks."},
         "initialization_ms": round(initialization * 1000, 2), "scenarios": outputs,
     }, indent=2, ensure_ascii=True), encoding="utf-8")
     print(f"Initialization: {initialization:.3f}s; report: {args.output}")

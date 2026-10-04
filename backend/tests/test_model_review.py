@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 import json
+import uuid
 
 import pytest
 from fastapi.testclient import TestClient
@@ -129,15 +130,31 @@ def test_mixed_environments_and_incomplete_extraction_stay_visible():
 
 
 @pytest.fixture(scope='module')
-def client():
-    with TestClient(app) as value:
-        yield value
+def client(tmp_path_factory):
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv('AEGIS_WORKSPACE_DB', str(tmp_path_factory.mktemp('guided-review') / 'workspace.sqlite3'))
+        with TestClient(app) as value:
+            yield value
+
+
+def complete_questionnaire(client, body):
+    body = deepcopy(body)
+    body.setdefault('assessment_id', '')
+    body['assessment_id'] = body['assessment_id'] or str(uuid.uuid4())
+    body['application_types'] = ['web']
+    preview = client.post('/model-review/prepare', json=body)
+    assert preview.status_code == 200, preview.text
+    body['questionnaire_answers'] = [{'question_id': q['id'], 'value': 'unknown',
+        'note': 'Test architect will obtain deployment evidence.', 'source_ids': [], 'evidence_digest': q['evidence_digest']}
+        for q in preview.json()['questionnaire']['questions']]
+    body['generate_dfd'] = True
+    return body
 
 
 def test_scoped_review_api_analysis_and_prepare_agree(client):
     request = payload()
     record = answer(request, state='absent')
-    body = payload(answers=[record]).model_dump()
+    body = complete_questionnaire(client, payload(answers=[record]).model_dump())
     prepared = client.post('/model-review/prepare', json=body)
     result = client.post('/model-review/analyze', json=body)
     assert prepared.status_code == result.status_code == 200, result.text
@@ -163,11 +180,12 @@ def test_pdf_and_yaml_sources_survive_review_revisions(client):
     sources = extracted.json()['sources']
     assert len(sources) == 2 and all(s['text'].strip() for s in sources)
     original = deepcopy(sources)
-    body = payload(baseline=None, sources=sources).model_dump()
+    body = complete_questionnaire(client, payload(baseline=None, sources=sources).model_dump())
     first = client.post('/model-review/analyze', json=body)
     assert first.status_code == 200, first.text
     assert any(t['id'].startswith('IAC-') for t in first.json()['threats'])
     body['sources'].append({'id': 'redis', 'name': 'Session update', 'text': 'Redis stores Node.js API sessions.'})
+    body = complete_questionnaire(client, body)
     second = client.post('/model-review/analyze', json=body)
     assert second.status_code == 200, second.text
     assert body['sources'][:2] == original
@@ -245,7 +263,7 @@ def test_iac_context_keeps_findings_known_issues_and_file_evidence(client):
     assert metadata['iac_findings'] and metadata['known_issues']
     assert all(f['source_file'] == 'main.tf' for f in metadata['iac_findings'])
     assert any('unreadable page' in w['message'] for w in prepared['warnings'])
-    result = client.post('/model-review/analyze', json=request.model_dump())
+    result = client.post('/model-review/analyze', json=complete_questionnaire(client, request.model_dump()))
     assert result.status_code == 200, result.text
     assert any(t['id'].startswith('IAC-') for t in result.json()['threats'])
     assert not any(c['type'] == 'ML Service' for c in prepared['architecture']['components'])
@@ -267,7 +285,7 @@ def test_excluded_iac_resource_keeps_evidence_without_reassigning_findings(clien
     assert metadata['review_exclusions']
     assert all(f['resource_id'] != excluded for f in metadata['iac_findings'])
     assert metadata['iac_findings_count'] == len(metadata['iac_findings'])
-    result = client.post('/model-review/analyze', json=body)
+    result = client.post('/model-review/analyze', json=complete_questionnaire(client, body))
     assert result.status_code == 200, result.text
     static = [t for t in result.json()['threats'] if t['id'].startswith('IAC-')]
     assert static and all(t['component_id'] == components[0]['id'] for t in static)

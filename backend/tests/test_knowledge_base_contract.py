@@ -7,7 +7,14 @@ def test_every_loaded_rule_has_taxonomy_quality_and_provenance():
     rules = knowledge_base.get_all_threats()
 
     assert rules
-    assert all(rule["cwe"] and rule["owasp_top_10"] and rule["nist_800_53"] for rule in rules)
+    assert all(rule["cwe"] for rule in rules)
+    for rule in rules:
+        for field in ("cwe", "owasp_top_10", "nist_800_53"):
+            # An explicit unknown is preferable to a fabricated mapping based
+            # solely on STRIDE. Empty mappings must remain visible in provenance.
+            quality = rule["taxonomy_mapping_quality"][field]
+            assert quality in {"curated", "stride_category_fallback", "unmapped"}
+            assert bool(rule[field]) is (quality != "unmapped")
     assert all(rule["version"] and rule["source"] for rule in rules)
     assert all(set(rule["taxonomy_mapping_quality"]) == {
         "cwe", "owasp_top_10", "nist_800_53",

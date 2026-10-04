@@ -1,6 +1,7 @@
 // Backend API Service
 import { API_BASE_URL } from '../config';
 import { mapAnalysisResult } from '../utils/analysisMapper';
+import { workspaceAuthHeaders } from './workspaceAuth';
 
 const getAnalysisMode = (useLocalSlm = true) => (useLocalSlm ? 'standard' : 'fast');
 
@@ -10,6 +11,7 @@ export const analyzeSystem = async (systemDescription, projectName = "Untitled P
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
+                ...workspaceAuthHeaders(),
             },
             body: JSON.stringify({
                 description: systemDescription,
@@ -28,8 +30,7 @@ export const analyzeSystem = async (systemDescription, projectName = "Untitled P
 
         return mapAnalysisResult(result);
     } catch (error) {
-        console.error("Backend connection failed, falling back to offline mode for demo purposes.", error);
-        // Fallback or re-throw depending on preference.
+        console.error("Analysis request failed.", error);
         throw error;
     }
 };
@@ -54,6 +55,7 @@ export const analyzeDocuments = async (
 
         const response = await fetch(`${API_BASE_URL}/analyze-documents`, {
             method: 'POST',
+            headers: workspaceAuthHeaders(),
             body: formData,
         });
 
@@ -76,6 +78,7 @@ export const analyzeIac = async (iacContent, projectName = "Untitled Project", f
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
+                ...workspaceAuthHeaders(),
             },
             body: JSON.stringify({
                 iac_content: iacContent,
@@ -107,6 +110,7 @@ export const analyzeIacProject = async (files, projectName = "Untitled IaC Proje
     }
     const response = await fetch(`${API_BASE_URL}/analyze-iac-project`, {
         method: 'POST',
+        headers: workspaceAuthHeaders(),
         body: formData,
     });
     if (!response.ok) {
@@ -122,6 +126,7 @@ export const analyzeCode = async (codeContent, projectName = "Source Security Au
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
+                ...workspaceAuthHeaders(),
             },
             body: JSON.stringify({
                 code_content: codeContent,

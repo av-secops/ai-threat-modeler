@@ -1,9 +1,9 @@
-import React, { Suspense, lazy, useState, useEffect, useRef } from 'react';
+import React, { Suspense, lazy, useState, useEffect, useEffectEvent, useRef } from 'react';
 import ThreatInput from './components/ThreatInput';
 import Sidebar from './components/Sidebar';
 import { analyzeCode } from './services/mockAi';
 import { extractReviewSources, prepareModel, analyzeReviewedModel } from './services/modelReview';
-import { newWorkspace, saveWorkspace, loadWorkspace, draftSignature, commitRevision, annotationKey } from './utils/modelWorkspace';
+import { newWorkspace, saveWorkspace, loadWorkspace, draftSignature, commitRevision, annotationKey, upgradeWorkspaceDraft } from './utils/modelWorkspace';
 import { loadAnnotations, saveAnnotations } from './utils/annotations';
 import { useStreamingAnalysis } from './hooks/useStreamingAnalysis';
 import { useAutomaticModelPreview } from './hooks/useAutomaticModelPreview';
@@ -11,6 +11,7 @@ import { saveAnalysis } from './utils/storage';
 import { mapAnalysisResult } from './utils/analysisMapper';
 import { RotateCcw, Zap, Sparkles, Clock, FileCode2, Pencil, Download, ArrowLeft, Plus } from 'lucide-react';
 import { useToast } from './hooks/useToast';
+import { workspaceHash, workspaceLocation } from './utils/productWorkspace';
 
 const IacInput = lazy(() => import('./components/IacInput'));
 const CodeInput = lazy(() => import('./components/CodeInput'));
@@ -27,9 +28,10 @@ function App() {
   const [activeTab, setActiveTab] = useState('products');
   const [productScope, setProductScope] = useState(null);
   const [productLocation, setProductLocation] = useState(null);
+  const [dashboardReturn, setDashboardReturn] = useState(null);
   const [isNavigating, setIsNavigating] = useState(false);
   const navigationPending = useRef(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => !window.matchMedia?.('(min-width: 1024px)')?.matches);
   const [workspace, setWorkspace] = useState(null);
   const [reviewing, setReviewing] = useState(false);
   const [selectedRevision, setSelectedRevision] = useState(null);
@@ -46,6 +48,13 @@ function App() {
   const livePreview = useAutomaticModelPreview(workspace, reviewing && !['history', 'products'].includes(activeTab) && !isAnalyzing && !isNavigating && !workspace?.readOnly, setWorkspace);
 
   useEffect(() => { window.scrollTo(0, 0); }, [activeTab, reviewing, workspace?.id]);
+
+  useEffect(() => {
+    const media = window.matchMedia?.('(min-width: 1024px)');
+    const fitSidebar = event => { if (!event.matches) setSidebarCollapsed(true); };
+    media?.addEventListener('change', fitSidebar);
+    return () => media?.removeEventListener('change', fitSidebar);
+  }, []);
 
   useEffect(() => {
     if (darkMode) {
@@ -99,15 +108,18 @@ function App() {
     setIsAnalyzing(true);
     try {
       const sources = await extractReviewSources(options.files || []);
+      sources.push(...await extractReviewSources(options.diagramFiles || [], { diagram: true }));
       if (description.trim()) sources.unshift({ id: crypto.randomUUID(), name: 'Architecture notes', text: description,
         kind: 'text', included: true, environment: 'unspecified', version: '', metadata: {} });
       const next = newWorkspace(name, { project_name: name, sources, baseline: null, edits: [], answers: [],
         use_local_slm: useLocalSlm, analysis_mode: useLocalSlm ? 'standard' : 'fast', domain_profile: options.domainProfile || 'general',
+        application_types: options.applicationTypes || ['web'], other_application_type: options.otherApplicationType || '',
         environment: productScope?.environment || '', deployment_version: productScope?.release_name || '' });
+      if (options.importedSource) next.draft.payload.sources.push(options.importedSource);
       // Save sources before preparation so a failed parse can be corrected in place.
       await persistWorkspace(next);
       setData(null);
-      setReviewTab('architecture');
+      setReviewTab('questionnaire');
       setSuggestion('');
       setReviewing(true);
       const preview = await prepareModel(next.draft.payload);
@@ -122,6 +134,7 @@ function App() {
   const runReviewedAnalysis = async () => {
     if (workspace?.readOnly) return;
     if (!workspace?.draft.preview || workspace.draft.preparedSignature !== draftSignature(workspace.draft.payload)) return;
+    if (!workspace.draft.preview.readiness?.dfd_generated) return;
     setIsAnalyzing(true);
     try {
       const signature = draftSignature(workspace.draft.payload);
@@ -157,20 +170,32 @@ function App() {
       const sources = [];
       for (const file of files) {
         const kind = file.name.split('.').at(-1).toLowerCase();
-        if (workspace.draft.payload.input_kind === 'iac' && !['pdf', 'docx'].includes(kind)) {
+        if (workspace.draft.payload.input_kind === 'iac' && !['pdf', 'docx', 'drawio', 'xml', 'mmd', 'mermaid', 'png', 'jpg', 'jpeg'].includes(kind)) {
           if (file.size > 2000000) throw new Error(`${file.name} exceeds the review file size limit.`);
           sources.push({ id: crypto.randomUUID(), name: file.name, text: await file.text(), kind,
             included: true, environment: 'unspecified', version: '', metadata: { role: 'source_design' } });
         } else {
-          sources.push(...await extractReviewSources([file]));
+          sources.push(...await extractReviewSources([file], { diagram: !!(replaceId && workspace.draft.payload.sources.find(s => s.id === replaceId)?.metadata?.diagram_model), existingSources: replaceId ? [] : [...workspace.draft.payload.sources, ...sources] }));
         }
       }
       const current = workspace.draft.payload.sources;
-      const nextSources = replaceId
+      if (!sources.length) { toast.success('This source is already in the assessment.'); return; }
+      let nextSources = replaceId
         ? current.map((s) => s.id === replaceId ? { ...sources[0], id: replaceId, environment: s.environment, version: s.version,
           metadata: { ...sources[0].metadata, ...Object.fromEntries(['deployment_version', 'tenant_id', 'cloud_account'].filter((key) => s.metadata?.[key] !== undefined).map((key) => [key, s.metadata[key]])) } } : s)
         : [...current, ...sources];
-      await persistWorkspace({ ...workspace, draft: { ...workspace.draft, payload: { ...workspace.draft.payload, sources: nextSources } } });
+      let edits = workspace.draft.payload.edits;
+      let suspended = [];
+      if (replaceId) {
+        const { replaceDiagramSource } = await import('./utils/diagramRevision');
+        const result = replaceDiagramSource(current.find(s => s.id === replaceId), nextSources.find(s => s.id === replaceId), edits);
+        nextSources = nextSources.map(s => s.id === replaceId ? result.source : s);
+        edits = result.edits;
+        suspended = result.suspended;
+      }
+      await persistWorkspace({ ...workspace, draft: { ...workspace.draft,
+        suspendedDiagramEdits: [...(workspace.draft.suspendedDiagramEdits || []), ...suspended],
+        payload: { ...workspace.draft.payload, sources: nextSources, edits } } });
     } catch (error) {
       toast.error(error.message, 'Upload failed; existing sources retained');
     } finally {
@@ -182,7 +207,7 @@ function App() {
     if (isAnalyzing || workspace?.readOnly) return;
     setReviewTab(tab);
     setSuggestion(proposedText);
-    if (workspace) { setReviewing(true); return; }
+    if (workspace) { setWorkspace(upgradeWorkspaceDraft(workspace)); setReviewing(true); return; }
     setIsAnalyzing(true);
     try {
       const next = newWorkspace(projectName, { project_name: projectName, sources: [],
@@ -296,7 +321,7 @@ function App() {
       try {
         const saved = await loadWorkspace(record.workspaceId);
         if (!saved) throw new Error('Saved workspace was not found.');
-        setWorkspace(saved);
+        setWorkspace(upgradeWorkspaceDraft(saved));
         setProductScope(saved.productScope || null);
         const revision = saved.revisions.at(-1);
         setSelectedRevision(revision?.number || null);
@@ -326,6 +351,7 @@ function App() {
   };
 
   const resetAnalysis = () => {
+    setDashboardReturn(null);
     setWorkspace(null);
     setReviewing(false);
     setSelectedRevision(null);
@@ -359,14 +385,27 @@ function App() {
 
   const handleNewAnalysis = () => leaveAnalysis(() => { resetAnalysis(); });
 
-  const returnToRelease = (newModelScope = '') => leaveAnalysis(() => {
+  const returnToRelease = (newModelScope = '', fromHistory = false) => leaveAnalysis(() => {
+    if (dashboardReturn && !newModelScope) window.history.replaceState(null, '', dashboardReturn);
+    else if (!fromHistory) window.history.replaceState(null, '', workspaceHash(productScope));
     setProductLocation({ product_id: productScope.product_id, release_id: productScope.release_id, newModelScope });
     resetAnalysis();
     setProductScope(null);
     setActiveTab('products');
   });
 
+  const handleDashboardBack = useEffectEvent(() => {
+    if (dashboardReturn && productScope?.product_id && activeTab === 'static' && !new URLSearchParams(window.location.hash.split('?')[1]).has('report')) returnToRelease();
+    else if (productScope?.product_id && activeTab === 'static' && workspaceLocation(window.location.hash) && !workspaceLocation(window.location.hash).model_id) returnToRelease('', true);
+  });
+  useEffect(() => {
+    window.addEventListener('popstate', handleDashboardBack);
+    return () => window.removeEventListener('popstate', handleDashboardBack);
+  }, []);
+
   const startReleaseModel = scope => {
+    window.history.pushState({ newThreatModel: true }, '', workspaceHash(scope));
+    setDashboardReturn(null);
     resetAnalysis();
     setProductScope(scope);
     setProductLocation({ product_id: scope.product_id, release_id: scope.release_id });
@@ -375,12 +414,18 @@ function App() {
 
   // Page titles and icons for the header
   const openServerWorkspace = (row) => {
+    if (row.dashboardReturn) window.history.pushState(null, '', `${row.dashboardReturn}&report=${encodeURIComponent(row.id)}`);
     const scope = row.productScope || row.workspace.productScope || null;
+    if (!row.dashboardReturn && scope?.product_id) {
+      const hash = workspaceHash({ ...scope, model_id: row.id });
+      if (window.location.hash !== hash) window.history.pushState(null, '', hash);
+    }
     const saved = { ...row.workspace, productScope: scope, readOnly: row.readOnly, server: { release_id: row.release_id,
       application_id: row.application_id, environment: row.environment, version: row.version } };
-    const revision = saved.revisions.at(-1);
+    const revision = saved.revisions.find(r => r.number === row.selectedRevision) || saved.revisions.at(-1);
+    setDashboardReturn(row.dashboardReturn || null);
     for (const [key, value] of Object.entries(saved.reviewAnnotations || {})) saveAnnotations(key, value);
-    setWorkspace(saved); setProductScope(scope); setProjectName(saved.projectName);
+    setWorkspace(upgradeWorkspaceDraft(saved)); setProductScope(scope); setProjectName(saved.projectName);
     setData(revision?.data || null); setSelectedRevision(revision?.number || null);
     setReviewing(!revision); setActiveTab('static');
     setReviewTab('architecture'); setSuggestion('');
@@ -404,7 +449,7 @@ function App() {
 
   const pageInfo = {
     products: { title: 'Products', subtitle: 'Applications, releases and threat models', icon: FileCode2, color: 'text-brand-primary' },
-    static: { title: 'Static Analysis', subtitle: 'Rule-based + NLP + Semantic threat detection', icon: Zap, color: 'text-brand-primary' },
+    static: { title: productScope ? 'Threat model' : 'Static Analysis', subtitle: productScope ? 'Architecture assessment' : 'Rule-based + NLP + Semantic threat detection', icon: Zap, color: 'text-brand-primary' },
     code: { title: 'Code Security', subtitle: 'Evidence-backed checks for common source vulnerabilities', icon: FileCode2, color: 'text-brand-primary' },
     iac: { title: 'Infrastructure-as-Code', subtitle: 'Analyze cloud, container, pipeline, and multi-file IaC projects', icon: Zap, color: 'text-brand-success' },
     ai: { title: 'AI Analysis', subtitle: 'LLM-enhanced analysis with RAG', icon: Sparkles, color: 'text-brand-secondary' },
@@ -428,6 +473,7 @@ function App() {
         activeTab={activeTab}
         onTabChange={tab => {
           if (isAnalyzing || isNavigating) return;
+          if (!window.matchMedia?.('(min-width: 1024px)')?.matches) setSidebarCollapsed(true);
           if (tab === 'products' && activeTab !== 'products') {
             leaveAnalysis(() => { resetAnalysis(); setProductScope(null); setActiveTab(tab); });
           } else setActiveTab(tab);
@@ -437,11 +483,12 @@ function App() {
         collapsed={sidebarCollapsed}
         onCollapsedChange={setSidebarCollapsed}
       />
+      {!sidebarCollapsed && <button type="button" aria-label="Close navigation" className="fixed inset-y-0 left-[220px] right-0 z-40 bg-black/30 lg:hidden" onClick={() => setSidebarCollapsed(true)} />}
 
       {/* Main Content — offset by sidebar width */}
-      <div className={`${sidebarCollapsed ? 'ml-[68px]' : 'ml-[220px]'} transition-all duration-300`}>
+      <div className={`${sidebarCollapsed ? 'ml-[68px]' : 'ml-[68px] lg:ml-[220px]'} transition-all duration-300`}>
         {/* Top Bar */}
-        <header className="sticky top-0 z-40 border-b border-brand-200 bg-white/95 dark:border-brand-700 dark:bg-brand-900/95">
+        {activeTab !== 'products' && <header className="sticky top-0 z-40 border-b border-brand-200 bg-white/95 dark:border-brand-700 dark:bg-brand-900/95">
           <div className="mx-auto flex max-w-[1440px] items-center justify-between gap-2 px-3 py-3 sm:px-8 sm:py-3.5">
             <div className="flex min-w-0 items-center gap-2 sm:gap-3">
               <div className="hidden h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-brand-200 bg-brand-50 dark:border-brand-700 dark:bg-brand-800 sm:flex">
@@ -469,20 +516,20 @@ function App() {
               </div>
             </div>
           </div>
-        </header>
+        </header>}
 
         {/* Page Content */}
         <main className="mx-auto max-w-[1440px] px-3 py-5 sm:px-8 sm:py-7">
           <Suspense fallback={<div className="panel-soft px-6 py-14 text-center text-sm text-brand-500 dark:text-brand-400">Loading analysis workspace...</div>}>
           {productScope?.product_id && !['products', 'history'].includes(activeTab) && <nav aria-label="Release navigation" className="mb-4 flex flex-wrap items-center justify-between gap-3">
-            <button type="button" className="ui-button-secondary" disabled={isAnalyzing || isNavigating} onClick={() => returnToRelease()}><ArrowLeft size={16} />Back to release</button>
+            <button type="button" className="ui-button-secondary" disabled={isAnalyzing || isNavigating} onClick={() => returnToRelease()}><ArrowLeft size={16} />{dashboardReturn ? 'Back to dashboard' : 'Back to release'}</button>
             {data && !reviewing && !workspace?.readOnly && <button type="button" className="btn-brand gap-2" disabled={isAnalyzing || isNavigating} onClick={() => returnToRelease('application')}><Plus size={16} />Add another application</button>}
           </nav>}
           {workspace?.activeJob && activeTab !== 'products' && !isAnalyzing && <div className="mb-3 flex flex-wrap items-center gap-3 text-sm"><span>Saved analysis job</span><button className="ui-button-secondary" onClick={runReviewedAnalysis} disabled={!!workspace.readOnly}>Resume analysis</button></div>}
           {productScope && !['products', 'history'].includes(activeTab) && <div className="mb-4 flex flex-wrap gap-x-4 gap-y-2 border-b border-brand-200 pb-3 text-sm dark:border-brand-700">
             <span className="font-semibold">{productScope.product_name} / {productScope.release_name}</span>
-            <span>{productScope.application_id ? `Ad hoc application: ${productScope.application_name}` : 'Complete release product'}</span>
-            <span>{productScope.environment}</span>
+            <span>{productScope.application_id ? `Application: ${productScope.application_name}` : 'Full release'}</span>
+            <span className="capitalize">{productScope.environment}</span>
           </div>}
           {workspace && !['history', 'products'].includes(activeTab) && <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-brand-200 pb-3 dark:border-brand-700">
             <div className="flex flex-wrap items-center gap-3 text-sm">{workspace.revisions.length > 0 && <label className="flex items-center gap-2">Report revision<select aria-label="Report revision" disabled={isAnalyzing} className="input-brand text-sm" value={selectedRevision || workspace.revisions.at(-1).number} onChange={(e) => loadRevision(Number(e.target.value))}>{workspace.revisions.map((r) => <option key={r.number} value={r.number}>Revision {r.number}{r.number === workspace.revisions.at(-1).number ? ' (latest)' : ''}</option>)}</select></label>}<span className="text-xs text-brand-500 dark:text-brand-400">{reviewing ? 'Draft' : selectedRevision === workspace.revisions.at(-1)?.number ? 'Latest report' : 'Historical report'}</span></div>
@@ -494,7 +541,7 @@ function App() {
           </div>}
           {activeTab === 'products' ? <ProductsWorkspace darkMode={darkMode} initialLocation={productLocation} onLocationChange={setProductLocation} onOpen={openServerWorkspace} onHistory={() => { setProductScope(null); setActiveTab('history'); }} onStart={startReleaseModel} /> : workspace && reviewing && activeTab !== 'history' ? <ModelReviewWorkspace key={`${workspace.id}-${reviewTab}-${suggestion}`} workspace={workspace} onChange={(next) => { setWorkspace(next); setSaveStatus('Unsaved draft changes'); }} onPrepare={livePreview.retry} previewUpdating={livePreview.updating} previewError={livePreview.error} onAnalyze={runReviewedAnalysis} onUpload={uploadReviewSources} onSave={saveDraft} onBack={workspace.revisions.length ? () => loadRevision(workspace.revisions.at(-1).number) : productScope?.product_id ? undefined : handleNewAnalysis} busy={isAnalyzing || isNavigating} saveStatus={saveStatus} darkMode={darkMode} initialTab={reviewTab} suggestion={suggestion} /> : activeTab === 'static' ? (
             <>
-              {!data && <ThreatInput onAnalyze={handleAnalyze} isAnalyzing={isAnalyzing || streaming.isAnalyzing} />}
+              {!data && <ThreatInput defaultProjectName={productScope ? `${productScope.application_name || productScope.product_name} - ${productScope.release_name}` : undefined} onAnalyze={handleAnalyze} isAnalyzing={isAnalyzing || streaming.isAnalyzing} />}
 
               {activeTab === 'static' && (isAnalyzing || streaming.isAnalyzing) && (
                 <div className="mx-auto flex w-full max-w-6xl flex-col items-center justify-center space-y-6 px-6 py-14 animate-fade-in-up panel-soft">

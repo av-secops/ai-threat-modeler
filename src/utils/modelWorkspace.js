@@ -48,12 +48,21 @@ export const clearWorkspaces = () => transaction('readwrite', (store) => store.c
 export const annotationKey = (id, revision) => `workspace:${id}:revision:${revision}`;
 
 export function newWorkspace(projectName, payload, legacyId = null) {
-  return { id: crypto.randomUUID(), projectName, legacyId, updatedAt: new Date().toISOString(),
-    revisions: [], draft: { payload, preview: null, preparedSignature: null }, schemaVersion: 1 };
+  const id = crypto.randomUUID();
+  return { id, projectName, legacyId, updatedAt: new Date().toISOString(),
+    revisions: [], draft: { payload: { ...payload, assessment_id: id, application_types: payload.application_types || [],
+      questionnaire_answers: [], generate_dfd: false }, preview: null, preparedSignature: null }, schemaVersion: 2 };
 }
 
 export function draftSignature(payload) {
   return JSON.stringify(payload);
+}
+
+export function upgradeWorkspaceDraft(workspace) {
+  if (workspace.draft?.payload?.assessment_id || workspace.readOnly) return workspace;
+  return { ...workspace, schemaVersion: 2, draft: { ...workspace.draft, preparedSignature: null,
+    payload: { ...workspace.draft.payload, assessment_id: workspace.id, application_types: [],
+      questionnaire_answers: [], generate_dfd: false } } };
 }
 
 export function applyPreparedPreview(workspace, workspaceId, signature, preview) {

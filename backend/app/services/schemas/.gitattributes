@@ -1,0 +1,3 @@
+# Manifest hashes cover exact UTF-8/LF bytes, including on Windows checkouts.
+*.json text eol=lf
+*.txt text eol=lf

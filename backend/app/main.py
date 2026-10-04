@@ -3,12 +3,13 @@ import os
 import json
 import time
 import hashlib
+import hmac
 import logging
 import uuid
 from contextlib import asynccontextmanager
 from collections import OrderedDict
 from typing import Callable, Dict, Optional, Tuple, TypeVar
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 
@@ -18,6 +19,10 @@ from .services.document_ingestion import extract_documents
 from .services.model_review import ModelReviewRequest, prepare_model
 from .services.llm_analyzer import LLMAnalyzer
 from .services.llm_providers import provider_public_info, supported_provider_ids
+from .services.workspace_access import (
+    authenticate_request, authenticate_websocket_payload, identity_cache_key, identity_for_product, require_model_review,
+    require_platform_admin, require_role,
+)
 from .engine.retrieval_quality import (
     RetrievalCalibrator,
     RetrievalFeedbackStore,
@@ -45,8 +50,13 @@ async def lifespan(app: FastAPI):
     app.state.threat_analyzer = ThreatAnalyzer()
     from .services.enterprise_api import start_enterprise
     start_enterprise(app)
-    yield
-    app.state.job_runner.stop()
+    from .services.security_workflow_api import start_security_workflows
+    start_security_workflows(app)
+    try:
+        yield
+    finally:
+        app.state.job_runner.stop()
+        retrieval_monitor.flush()
 
 
 app = FastAPI(
@@ -57,6 +67,14 @@ app = FastAPI(
 )
 from .services.enterprise_api import router as enterprise_router
 app.include_router(enterprise_router)
+from .services.assessment_api import router as assessment_router
+app.include_router(assessment_router)
+from .services.knowledge_admin_api import router as knowledge_admin_router
+from .services.model_tools_api import router as model_tools_router
+from .services.security_workflow_api import router as security_workflow_router
+app.include_router(knowledge_admin_router)
+app.include_router(model_tools_router)
+app.include_router(security_workflow_router)
 
 if ENVIRONMENT == "production":
     if "*" in ALLOWED_ORIGINS:
@@ -72,11 +90,10 @@ if ENVIRONMENT == "production":
         allow_headers=["Content-Type", "Authorization"],
     )
 else:
-    # Development runs on a developer's machine and has no authentication, so a
-    # wildcard is acceptable. Credentials are not: pairing the two is rejected by
-    # browsers and would be a real flaw if this configuration ever shipped.
+    # Browser credentialed access remains disabled in development. Route guards
+    # still require configured credentials or restrict legacy use to loopback.
     logger.warning(
-        "Running in development mode: CORS is open and no admin token is required. "
+        "Running in development mode: CORS is open; unconfigured access is loopback-only. "
         "Set ENVIRONMENT=production and ALLOWED_ORIGINS before exposing this service."
     )
     app.add_middleware(
@@ -159,7 +176,7 @@ class IaCAnalyzeRequest(BaseModel):
     @field_validator('format_hint')
     @classmethod
     def validate_format_hint(cls, v):
-        if v not in ['auto', 'docker-compose', 'kubernetes', 'helm', 'helm-values', 'kustomize', 'terraform', 'terraform-plan', 'cloudformation', 'arm', 'bicep', 'pulumi', 'ci']:
+        if v not in ['auto', 'dockerfile', 'docker-compose', 'kubernetes', 'helm', 'helm-values', 'kustomize', 'terraform', 'terraform-plan', 'cloudformation', 'arm', 'bicep', 'pulumi', 'ci']:
             return 'auto'
         return v
 
@@ -464,11 +481,20 @@ def _build_diff_summary(previous: Optional[AnalysisResult], current: AnalysisRes
 
 
 def _require_admin(request: Request):
-    if ENVIRONMENT != "production" and not ADMIN_API_TOKEN:
-        return
-    provided = request.headers.get("x-admin-token")
-    if not ADMIN_API_TOKEN or provided != ADMIN_API_TOKEN:
-        raise HTTPException(status_code=403, detail="Admin token required")
+    identity = require_platform_admin(authenticate_request(request))
+    if ADMIN_API_TOKEN:
+        provided = request.headers.get("x-admin-token", "")
+        if not hmac.compare_digest(provided.encode(), ADMIN_API_TOKEN.encode()):
+            raise HTTPException(status_code=403, detail="Admin token required")
+    return identity
+
+
+def _analysis_identity(request: Request):
+    return require_role(authenticate_request(request), 'editor')
+
+
+def _viewer_identity(request: Request):
+    return require_role(authenticate_request(request))
 
 
 def get_shared_analyzer(request_or_socket) -> ThreatAnalyzer:
@@ -500,7 +526,6 @@ def _analyze_text_payload(
     domain_profile: str = "general",
     source_documents: Optional[list] = None,
 ) -> AnalysisResult:
-    previous_result = _latest_analysis_by_project.get(project_name)
     result = analyzer.analyze_from_text(
         description,
         project_name,
@@ -509,7 +534,8 @@ def _analyze_text_payload(
         domain_profile=domain_profile,
         source_documents=source_documents,
     )
-    result.diff_summary = _build_diff_summary(previous_result, result)
+    # A project name is neither a tenant identity nor an authorized revision.
+    result.diff_summary = None
 
     if source_documents:
         coverage = result.coverage or {}
@@ -521,16 +547,16 @@ def _analyze_text_payload(
         metadata["source_documents"] = source_documents
         result.architecture.metadata = metadata
 
-    _latest_analysis_by_project[project_name] = result
     return result
 
 
 @app.post("/model-review/sources")
-async def review_sources(files: list[UploadFile] = File(...)):
+async def review_sources(request: Request, files: list[UploadFile] = File(...), diagram: bool = Form(False)):
     """Extract once; retain the source text and extraction warnings in the draft."""
     try:
+        _analysis_identity(request)
         from .engine.parser import ArchitectureParser
-        text, documents = await extract_documents(files, max_files=MAX_UPLOAD_FILES, max_total_bytes=MAX_UPLOAD_TOTAL_BYTES)
+        text, documents = await extract_documents(files, max_files=MAX_UPLOAD_FILES, max_total_bytes=MAX_UPLOAD_TOTAL_BYTES, diagram=diagram)
         bodies = ArchitectureParser._analysis_sources(text)
         return {'sources': [
             {'id': uuid.uuid4().hex, 'name': doc['filename'], 'kind': doc['type'],
@@ -541,6 +567,8 @@ async def review_sources(files: list[UploadFile] = File(...)):
         ]}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HTTPException:
+        raise
     except Exception as exc:
         raise _failure(exc, 'Source extraction')
 
@@ -548,7 +576,12 @@ async def review_sources(files: list[UploadFile] = File(...)):
 @app.post("/model-review/prepare")
 async def review_prepare(request: Request, payload: ModelReviewRequest):
     try:
-        return await _run_analysis(lambda: prepare_model(payload), 'Model preparation')
+        identity = _analysis_identity(request)
+        product_id = require_model_review(request.app.state.product_store, identity, payload)
+        if product_id:
+            identity = identity_for_product(identity, product_id)
+        return await _run_analysis(lambda: request.app.state.assessment_store.prepare(payload, identity)
+            if payload.assessment_id else prepare_model(payload, render=False), 'Model preparation')
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except HTTPException:
@@ -560,10 +593,14 @@ async def review_prepare(request: Request, payload: ModelReviewRequest):
 @app.post("/model-review/analyze", response_model=AnalysisResult)
 async def review_analyze(request: Request, payload: ModelReviewRequest):
     try:
+        identity = _analysis_identity(request)
+        product_id = require_model_review(request.app.state.product_store, identity, payload)
+        if product_id:
+            identity = identity_for_product(identity, product_id)
         analyzer = get_shared_analyzer(request)
 
         def execute():
-            prepared = prepare_model(payload)
+            prepared = request.app.state.assessment_store.prepare(payload, identity, require_ready=True)
             architecture = SystemArchitecture.model_validate(prepared['architecture'])
             if not architecture.components:
                 raise ValueError('No components were modeled; correct the input before analyzing.')
@@ -574,7 +611,7 @@ async def review_analyze(request: Request, payload: ModelReviewRequest):
             # Diffs are computed against the client's explicit immutable revision,
             # never another user's most recent result sharing the project name.
             result.diff_summary = None
-            return result
+            return request.app.state.assessment_store.save_result(result, identity['name'])
 
         return await _run_analysis(execute, 'Reviewed model analysis')
     except ValueError as exc:
@@ -595,7 +632,9 @@ async def analyze(request: Request, payload: AnalyzeRequest):
     """
     try:
         # Cache key includes the effective analysis settings.
+        identity = _analysis_identity(request)
         cache_key = _stable_cache_key(
+            identity_cache_key(identity),
             payload.description,
             payload.project_name,
             payload.use_local_slm,
@@ -645,6 +684,7 @@ async def analyze_documents(
     Analyze uploaded design artifacts such as requirements docs, architecture notes, Markdown, or PDFs.
     """
     try:
+        identity = _analysis_identity(request)
         project_name = _sanitize_project_name(project_name)
         analysis_mode = _normalize_analysis_mode(analysis_mode)
         domain_profile = _normalize_domain_profile(domain_profile)
@@ -685,6 +725,7 @@ async def analyze_documents(
         AnalyzeRequest.validate_description(combined_description)
 
         cache_key = _stable_cache_key(
+            identity_cache_key(identity),
             combined_description,
             project_name,
             use_local_slm,
@@ -741,9 +782,11 @@ async def analyze_iac(request: Request, payload: IaCAnalyzeRequest):
     Analyze Infrastructure-as-Code (Docker Compose, Kubernetes, Terraform, or CloudFormation).
     """
     try:
+        identity = _analysis_identity(request)
         from .engine.iac_parser import IaCParser
 
         cache_key = _stable_cache_key(
+            identity_cache_key(identity),
             "iac", payload.project_name, payload.analysis_mode,
             payload.format_hint, payload.iac_content,
         )
@@ -752,7 +795,6 @@ async def analyze_iac(request: Request, payload: IaCAnalyzeRequest):
             return cached
         
         analyzer = get_shared_analyzer(request)
-        previous_result = _latest_analysis_by_project.get(payload.project_name)
 
         def work():
             architecture = IaCParser().parse(payload.iac_content, payload.format_hint)
@@ -761,8 +803,7 @@ async def analyze_iac(request: Request, payload: IaCAnalyzeRequest):
             return analyzer.analyze(architecture, payload.project_name, analysis_mode=payload.analysis_mode)
 
         result = await _run_analysis(work, "IaC analysis")
-        result.diff_summary = _build_diff_summary(previous_result, result)
-        _latest_analysis_by_project[payload.project_name] = result
+        result.diff_summary = None
         _analysis_cache.set(cache_key, result)
         
         return result
@@ -784,6 +825,7 @@ async def analyze_iac_project(
 ):
     """Analyze a related set of IaC, deployment, and CI files as one project."""
     try:
+        identity = _analysis_identity(request)
         from .engine.iac_parser import IaCParser
 
         project_name = _sanitize_project_name(project_name)
@@ -804,6 +846,7 @@ async def analyze_iac_project(
             })
 
         cache_key = _stable_cache_key(
+            identity_cache_key(identity),
             "iac-project", project_name, analysis_mode,
             tuple((item["filename"], item["content"]) for item in inputs),
         )
@@ -812,7 +855,6 @@ async def analyze_iac_project(
             return cached
 
         analyzer = get_shared_analyzer(request)
-        previous_result = _latest_analysis_by_project.get(project_name)
 
         def work():
             architecture = IaCParser().parse_project(inputs)
@@ -821,8 +863,7 @@ async def analyze_iac_project(
             return analyzer.analyze(architecture, project_name, analysis_mode=analysis_mode)
 
         result = await _run_analysis(work, "IaC project analysis")
-        result.diff_summary = _build_diff_summary(previous_result, result)
-        _latest_analysis_by_project[project_name] = result
+        result.diff_summary = None
         _analysis_cache.set(cache_key, result)
         return result
     except ValueError as e:
@@ -837,6 +878,7 @@ async def analyze_iac_project(
 async def analyze_code(request: Request, payload: CodeAnalyzeRequest):
     """Run evidence-backed checks for common source-code vulnerability patterns."""
     try:
+        _analysis_identity(request)
         from .engine.code_security import CodeSecurityAnalyzer
 
         findings = CodeSecurityAnalyzer().analyze(payload.code_content)
@@ -855,59 +897,30 @@ async def analyze_code(request: Request, payload: CodeAnalyzeRequest):
             },
         )
         analyzer = get_shared_analyzer(request)
-        previous_result = _latest_analysis_by_project.get(payload.project_name)
         result = analyzer.analyze(
             architecture,
             payload.project_name,
             analysis_mode=payload.analysis_mode,
         )
-        result.diff_summary = _build_diff_summary(previous_result, result)
-        _latest_analysis_by_project[payload.project_name] = result
+        result.diff_summary = None
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         raise _failure(e, "Code analysis")
 
 
 @app.get("/health")
 def health_check():
-    """Health check endpoint for monitoring."""
-    # Report NLP/DL capabilities
-    ml_features = {
-        'nlp_parser': False,
-        'semantic_matching': False,
-        'attack_chains': False,
-    }
-    try:
-        from .engine.nlp_processor import nlp_runtime_ready
-        ml_features['nlp_parser'] = nlp_runtime_ready()
-    except ImportError:
-        pass
-    try:
-        from .engine.embedding_service import EMBEDDINGS_AVAILABLE, FAISS_AVAILABLE
-        ml_features['semantic_matching'] = EMBEDDINGS_AVAILABLE
-        ml_features['vector_search'] = FAISS_AVAILABLE
-    except ImportError:
-        pass
-    try:
-        from .engine.attack_chain import NX_AVAILABLE
-        ml_features['attack_chains'] = NX_AVAILABLE
-    except ImportError:
-        pass
-    
-    return {
-        "status": "ok",
-        "version": "2.3.2",
-        "environment": ENVIRONMENT,
-        "ml_features": ml_features,
-        "retrieval": retrieval_monitor.snapshot(),
-    }
+    """Public liveness only; operational retrieval metrics require admin access."""
+    return {"status": "ok", "version": "2.3.2"}
 
 
 @app.post("/feedback/findings")
-def record_finding_feedback(payload: FindingFeedbackRequest):
+def record_finding_feedback(payload: FindingFeedbackRequest, identity=Depends(_analysis_identity)):
     """Record a review decision without automatically trusting it for training."""
     try:
-        return RetrievalFeedbackStore().record(payload.model_dump(mode="json"))
+        return RetrievalFeedbackStore().record({**payload.model_dump(mode="json"), 'reviewer': identity['name']})
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -915,10 +928,10 @@ def record_finding_feedback(payload: FindingFeedbackRequest):
 @app.post("/admin/retrieval-feedback/approve")
 def approve_retrieval_feedback(request: Request, payload: FeedbackApprovalRequest):
     """Approve one reviewed decision and build candidate thresholds, without activating them."""
-    _require_admin(request)
+    identity = _require_admin(request)
     store = RetrievalFeedbackStore()
     try:
-        approval = store.approve(payload.feedback_id, payload.approved_by)
+        approval = store.approve(payload.feedback_id, identity['name'])
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="feedback record not found") from exc
     except ValueError as exc:
@@ -956,6 +969,8 @@ async def retrain_local_models(request: Request):
             "message": "Local knowledge base and models rebuilt successfully",
             "stats": stats,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise _failure(e, "Local retraining")
 
@@ -965,16 +980,35 @@ async def websocket_analyze(websocket: WebSocket):
     """
     WebSocket endpoint for streaming analysis progress.
     
-    Client sends: {"description": "...", "project_name": "..."}
+    Client sends: {"access_token": "...", "description": "...", "project_name": "..."}
+    The token is optional only for authenticated headers or unconfigured local use.
     Server streams: {"type": "progress", "phase": "...", "progress": 0-100, "message": "..."}
     Final message:  {"type": "result", "data": <full analysis result>}
     """
+    if 'access_token' in websocket.query_params or 'token' in websocket.query_params:
+        await websocket.close(code=4401)
+        return
+    if websocket.headers.getlist('authorization'):
+        try:
+            require_role(await asyncio.to_thread(authenticate_request, websocket), 'editor')
+        except HTTPException as exc:
+            await websocket.close(code=4401 if exc.status_code == 401 else 4403)
+            return
     await websocket.accept()
     
     try:
-        # Receive analysis request
-        data = await websocket.receive_text()
+        # Browsers cannot set an Authorization header on WebSocket handshakes.
+        # Bound unauthenticated socket lifetime and authenticate the first message.
+        data = await asyncio.wait_for(websocket.receive_text(), timeout=5)
+        if len(data) > 32_768:
+            await websocket.close(code=1009)
+            return
         payload = json.loads(data)
+        del data
+        if not isinstance(payload, dict):
+            await websocket.close(code=1008)
+            return
+        require_role(await asyncio.to_thread(authenticate_websocket_payload, websocket, payload), 'editor')
         
         description = payload.get('description', '')
         project_name = payload.get('project_name', 'Untitled Project')
@@ -982,10 +1016,10 @@ async def websocket_analyze(websocket: WebSocket):
         analysis_mode = payload.get('analysis_mode', 'standard')
         domain_profile = payload.get('domain_profile', 'general')
         
-        if not description or len(description) < 10:
+        if not isinstance(description, str) or not 10 <= len(description) <= 10_000:
             await websocket.send_json({
                 "type": "error",
-                "message": "Description must be at least 10 characters"
+                "message": "Description must be between 10 and 10000 characters"
             })
             await websocket.close()
             return
@@ -1004,7 +1038,6 @@ async def websocket_analyze(websocket: WebSocket):
             progress_callback=send_progress,
             analyzer=shared_analyzer
         )
-        previous_result = _latest_analysis_by_project.get(project_name)
         result = await streaming_analyzer.analyze_streaming(
             description,
             project_name,
@@ -1012,11 +1045,7 @@ async def websocket_analyze(websocket: WebSocket):
             analysis_mode=analysis_mode,
             domain_profile=domain_profile
         )
-        # This is the path the UI uses first, and the one a re-analysis of an
-        # amended model arrives on, so it is the path where the reviewer most
-        # needs to be told what their edit changed.
-        result.diff_summary = _build_diff_summary(previous_result, result)
-        _latest_analysis_by_project[project_name] = result
+        result.diff_summary = None
 
         # Send final result
         result_dict = result.model_dump() if hasattr(result, 'model_dump') else result.dict()
@@ -1025,6 +1054,10 @@ async def websocket_analyze(websocket: WebSocket):
             "data": result_dict
         })
         
+    except HTTPException as exc:
+        await websocket.close(code=4401 if exc.status_code == 401 else 4403)
+    except asyncio.TimeoutError:
+        await websocket.close(code=4408)
     except WebSocketDisconnect:
         pass  # Client disconnected
     except json.JSONDecodeError:
@@ -1036,7 +1069,7 @@ async def websocket_analyze(websocket: WebSocket):
         try:
             await websocket.send_json({
                 "type": "error",
-                "message": f"Analysis failed: {str(e)}"
+                "message": "Analysis failed. Check server diagnostics."
             })
         except Exception:
             pass
@@ -1049,6 +1082,7 @@ async def websocket_analyze(websocket: WebSocket):
 
 @app.post("/analyze-with-llm", response_model=AnalysisResult)
 async def analyze_with_llm(request: Request, payload: LLMAnalyzeRequest):
+    _analysis_identity(request)
     return await _run_analysis(lambda: _analyze_with_llm_sync(request, payload), "AI-enhanced analysis")
 
 
@@ -1064,7 +1098,6 @@ def _analyze_with_llm_sync(request: Request, payload: LLMAnalyzeRequest):
     try:
         # Run rule-based analysis (includes NLP + semantic matching)
         analyzer = get_shared_analyzer(request)
-        previous_result = _latest_analysis_by_project.get(payload.project_name)
         rule_based_result = analyzer.analyze_from_text(
             payload.description,
             payload.project_name,
@@ -1153,8 +1186,7 @@ def _analyze_with_llm_sync(request: Request, payload: LLMAnalyzeRequest):
                 "llm_error": ai_error,
             }
 
-        rule_based_result.diff_summary = _build_diff_summary(previous_result, rule_based_result)
-        _latest_analysis_by_project[payload.project_name] = rule_based_result
+        rule_based_result.diff_summary = None
         
         return rule_based_result
         
@@ -1172,13 +1204,13 @@ def _analyze_with_llm_sync(request: Request, payload: LLMAnalyzeRequest):
         raise _failure(e, "LLM analysis")
 
 
-@app.get("/llm/providers")
+@app.get("/llm/providers", dependencies=[Depends(_viewer_identity)])
 async def get_llm_providers():
     """Return supported external LLM providers and fallback model metadata."""
     return {"providers": provider_public_info()}
 
 
-@app.post("/llm/models")
+@app.post("/llm/models", dependencies=[Depends(_analysis_identity)])
 async def get_llm_models(payload: LLMModelsRequest):
     """Validate an API key and return available models for the selected provider."""
     try:
@@ -1197,7 +1229,7 @@ async def get_llm_models(payload: LLMModelsRequest):
         }
 
 
-@app.post("/validate-api-key")
+@app.post("/validate-api-key", dependencies=[Depends(_analysis_identity)])
 async def validate_api_key(payload: APIKeyValidationRequest):
     """
     Validate an LLM API key.

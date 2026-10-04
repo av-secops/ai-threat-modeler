@@ -21,6 +21,8 @@ coverage
 __pycache__/
 *.py[cod]
 backend/app/knowledge_base/cache/
+# Rebuilt from the knowledge base; do not publish a local pickle cache.
+backend/app/data/stride_classifier.pkl
 backend/data/
 backend/*_result.json
 backend/*_report.md

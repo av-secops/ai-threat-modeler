@@ -5,6 +5,7 @@ compatible, cited claims can set a component property; uncertainty stays explici
 """
 
 from collections import defaultdict
+from bisect import bisect_right
 from copy import deepcopy
 from functools import lru_cache
 import hashlib
@@ -13,8 +14,9 @@ import re
 
 from . import control_statements, source_index
 from .flow_extraction import alias_index, find_mentions
+from .control_contracts import presence, scope_matches
 
-VERSION = 'source-correlation-1'
+VERSION = 'source-correlation-3'
 _PLANNED = re.compile(r'\b(?:planned|proposed|recommended|roadmap|todo|should|must|will|intend(?:s|ed)?|plan(?:s)? to)\b', re.I)
 _UNKNOWN = re.compile(r'\b(?:unknown|unspecified|not documented|not specified|to be confirmed)\b', re.I)
 _ENDPOINT = re.compile(r'(?<![\w:/])(/[A-Za-z0-9_{}*-]+(?:/[A-Za-z0-9_{}*-]+)*)')
@@ -69,14 +71,26 @@ def _source_parts(architecture):
     return parts, documents
 
 
-def _locate(clause, lines):
+def _citation_index(lines):
+    body, offsets, citations, length = [], [], [], 0
+    for line, citation in lines:
+        normalized = ' '.join(line.lower().split())
+        if not normalized:
+            continue
+        offsets.append(length)
+        citations.append(citation)
+        body.append(normalized)
+        length += len(normalized) + 1
+    return ' '.join(body), offsets, citations
+
+
+def _locate(clause, lines, indexed=None):
     needle = ' '.join(clause.lower().split())
-    for offset, (line, citation) in enumerate(lines):
-        if needle in ' '.join(' '.join(item[0] for item in lines[offset:offset + 12]).lower().split()):
-            # Prefer the actual starting line over an earlier nearby paragraph.
-            if needle[:min(24, len(needle))] in ' '.join(line.lower().split()):
-                return citation
-    return next((cite for line, cite in lines if needle in ' '.join(line.lower().split())), {})
+    if not needle:
+        return {}
+    body, offsets, citations = indexed if indexed is not None else _citation_index(lines)
+    position = body.find(needle)
+    return citations[bisect_right(offsets, position) - 1] if position >= 0 and citations else {}
 
 
 def _scope(statement, document):
@@ -85,17 +99,14 @@ def _scope(statement, document):
             'deployment_version': str(document.get('deployment_version') or ''),
             'tenant_id': str(document.get('tenant_id') or ''),
             'cloud_account': str(document.get('cloud_account') or ''),
+            **{key: deepcopy(document[key]) for key in ('region', 'cloud_region', 'cloud_provider', 'technology',
+                'resource_type', 'trust_boundary', 'boundary_ids') if document.get(key)},
             'endpoints': sorted(set(_ENDPOINT.findall(statement))),
             'workflow_restricted': bool(_WORKFLOW_SCOPE.search(statement))}
 
 
 def _applicable(scope, component):
-    props = component.properties or {}
-    for key in ('environment', 'deployment_version', 'tenant_id', 'cloud_account'):
-        actual = normalize_environment(props.get(key)) if key == 'environment' else str(props.get(key) or '')
-        if scope.get(key) and scope[key] != actual:
-            return False
-    return True
+    return scope_matches(scope, component.properties or {}, component_type=component.type)
 
 
 def _subject(statement, control, lines, aliases):
@@ -149,7 +160,7 @@ def reconcile_claims(architecture):
     component_sources = defaultdict(list)
     for filename, lines in parts.items():
         document = documents.get(filename, {})
-        if document.get('role') == 'reference_report':
+        if document.get('role') == 'reference_report' or document.get('diagram_model'):
             continue
         for line, citation in lines:
             for _, _, identifier in find_mentions(re.sub(r'[-_]+', ' ', line), aliases):
@@ -157,17 +168,17 @@ def reconcile_claims(architecture):
                     'source_type': 'architecture_input', 'statement': line.strip(), 'confidence': 'High',
                     'document_version': document.get('document_version') or '',
                     'verification_status': 'not_runtime_verified', 'scope': _scope(line, document)}
-                if evidence not in component_sources[identifier]:
+                if _applicable(evidence['scope'], components[identifier]) and evidence not in component_sources[identifier]:
                     component_sources[identifier].append(evidence)
         body = '\n'.join(line for line, _ in lines)
+        citations = _citation_index(lines)
         extracted = _claims(body) if len(body) <= 32000 else _claims.__wrapped__(body)
         for control, state, statement in extracted:
-            normalized = re.sub(r'[-_]+', ' ', statement)
-            mentions = find_mentions(normalized, aliases)
-            citation = _locate(statement, lines)
+            citation = _locate(statement, lines, citations)
             scope = _scope(statement, document)
             fact = {**citation, 'source_id': document.get('source_id') or citation.get('source_id') or fingerprint(filename)[:20],
                     'document': filename, 'document_version': document.get('document_version') or '',
+                    'source_type': 'architecture_input', 'evidence_scope': 'control',
                     'kind': 'control', 'control': control, 'state': state, 'statement': statement,
                     'scope': scope, 'verification_status': 'not_runtime_verified', 'basis': 'source_statement'}
             fact['id'] = 'claim:' + fingerprint(fact)[:24]
@@ -184,6 +195,7 @@ def reconcile_claims(architecture):
         if fact['element_id']:
             by_component[fact['element_id']].append(fact)
     conflicts = []
+    managed = {f['control'] for f in facts}
     for identifier, component in components.items():
         props = component.properties
         if component_sources[identifier]:
@@ -201,14 +213,14 @@ def reconcile_claims(architecture):
         component_claims = by_component[identifier]
         # Reconciliation must not propagate a planned/scoped claim credited by
         # the older prose parser to unrelated components.
-        managed = {f['control'] for f in facts if f['element_id'] or len(parts) > 1}
         grouped = defaultdict(list)
         for fact in component_claims:
             grouped[fact['control']].append(fact)
         previous = props.get('control_evidence') or {}
         for control in managed:
             records = grouped[control]
-            owner_records = [r for r in previous.get(control, []) if r.get('source_ref') == 'reviewer_clarification']
+            owner_records = [r for r in previous.get(control, []) if r.get('source_ref') == 'reviewer_clarification'
+                and r.get('applicable') is not False and _applicable(r.get('scope') or {}, component)]
             configured = props.get('configuration_control_values', {}).get(control)
             if direct_config and isinstance(configured, bool):
                 records = [*records, {'state': 'present' if configured else 'absent',
@@ -222,6 +234,18 @@ def reconcile_claims(architecture):
             scoped = [r for r in records if r.get('applicable') and (r.get('scope', {}).get('endpoints') or r.get('scope', {}).get('workflow_restricted'))]
             if state == 'unknown' and scoped:
                 state = 'partial'
+            # A general claim cannot erase an explicitly documented exception.
+            # Contradictions on one endpoint do not establish global absence.
+            scoped_groups = defaultdict(list)
+            for record in scoped:
+                scoped_groups[fingerprint(record.get('scope', {}))].append(record)
+            scoped_conflicts = [group for group in scoped_groups.values() if _resolved_state(group) == 'conflicting']
+            if scoped_conflicts or (state in {'present', 'absent'} and any(
+                    r['state'] in {'present', 'absent'} and r['state'] != state for r in scoped)):
+                state = 'partial'
+            for group in scoped_conflicts:
+                conflicts.append({'element_id': identifier, 'control': control, 'state': 'conflicting',
+                    'scope': deepcopy(group[0]['scope']), 'claim_ids': [r['id'] for r in group if 'id' in r]})
             if not broad and not records and not props.get('control_evidence', {}).get(control):
                 # Do not erase independent structured control fields.
                 if props.get('authoritative') and control not in props.get('correlated_controls', {}):
@@ -257,16 +281,17 @@ def reconcile_claims(architecture):
                 'basis': 'owner_correction' if component.properties.get('reviewer_declared') else 'source_statement' if component.properties.get('evidence_status') == 'explicit' else 'inferred'})
     flow_gaps = []
     for flow in architecture.flows:
-        identifier = flow.properties.get('review_id') or f'flow:{flow.source_id}->{flow.target_id}'
+        assumed = flow.assumed or presence(flow.properties.get('assumed')) is True
+        identifier = flow.id or flow.properties.get('review_id') or f'flow:{flow.source_id}->{flow.target_id}'
         for evidence in flow.evidence or []:
             facts.append({'id': 'flow:' + fingerprint([identifier, evidence])[:24],
                 'element_id': identifier, 'kind': 'flow', **deepcopy(evidence),
                 'source_component': flow.source_id, 'target_component': flow.target_id,
                 'protocol': flow.protocol, 'data_type': flow.data_type,
-                'basis': 'inferred' if flow.assumed else 'owner_correction' if flow.properties.get('reviewer_declared') else 'source_statement'})
-        if flow.assumed or not flow.evidence or flow.protocol.lower() == 'unknown':
-            flow_gaps.append({'element_id': identifier, 'assumed': flow.assumed,
-                'missing': [key for key, missing in [('source_evidence', not flow.evidence), ('protocol', flow.protocol.lower() == 'unknown'), ('confirmed_path', flow.assumed)] if missing]})
+                'basis': 'inferred' if assumed else 'owner_correction' if flow.properties.get('reviewer_declared') else 'source_statement'})
+        if assumed or not flow.evidence or flow.protocol.lower() == 'unknown':
+            flow_gaps.append({'element_id': identifier, 'assumed': assumed,
+                'missing': [key for key, missing in [('source_evidence', not flow.evidence), ('protocol', flow.protocol.lower() == 'unknown'), ('confirmed_path', assumed)] if missing]})
     result = {'version': VERSION, 'facts': facts, 'unresolved_claims': unresolved,
               'conflicts': conflicts, 'flow_gaps': flow_gaps,
               'ambiguous_aliases': [{'alias': name, 'component_ids': sorted(ids)} for name, ids in owners.items() if len(ids) > 1],
@@ -280,8 +305,10 @@ def control_dependency_digest(architecture, element_id, control):
     target = next((c for c in architecture.components if c.id == element_id), None)
     if target:
         identity = [target.id, target.type, target.trust_level,
-                    {key: target.properties.get(key) for key in ('environment', 'cloud_account', 'tenant_id', 'deployment_version')},
-                    sorted((f.source_id, f.target_id, f.protocol, f.data_type) for f in architecture.flows if element_id in {f.source_id, f.target_id})]
+                    {key: target.properties.get(key) for key in ('environment', 'cloud_account', 'tenant_id', 'deployment_version',
+                        'technology', 'technologies', 'cloud_provider', 'region', 'cloud_region', 'trust_boundary', 'canonical_boundaries')},
+                    sorted((f.source_id, f.target_id, f.protocol, f.data_type, f.assumed or presence(f.properties.get('assumed')) is True)
+                        for f in architecture.flows if element_id in {f.source_id, f.target_id})]
         facts = [f for f in target.properties.get('correlation_evidence', []) if f.get('control') == control]
         return fingerprint([identity, facts, target.properties.get(control)])
     flow = next((f for f in architecture.flows if f.properties.get('review_id') == element_id), None)

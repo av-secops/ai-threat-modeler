@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import fnmatch
 import re
 from typing import Any, Iterable
 
@@ -112,24 +111,58 @@ def unrestricted_public_allow(value: Any) -> bool:
 def evaluate_access(query: dict) -> dict:
     """Bounded IAM policy evaluation, not a live effective-permissions simulator.
 
-    Each boundary/SCP/session document is an additional ceiling. Role sessions,
-    policy variables, NotPrincipal and unsupported condition operators abstain.
+    Role sessions, policy variables, NotPrincipal and unsupported conditions
+    abstain. Organization policies need explicit attachment levels: permissions
+    union at one level and intersect across levels, never across each document.
     """
-    sets = query.get('policy_sets') or {}
+    def unknown(reason):
+        return {'decision': 'unknown', 'matched_statements': [], 'limits': [reason], 'runtime_verified': False}
+
+    if not isinstance(query, dict):
+        return unknown('Invalid access request')
+    sets = query.get('policy_sets', {})
     reasons, matches = [], []
-    context = query.get('context') or {}
+    context = query.get('context', {})
     principal = query.get('principal', '')
     if not isinstance(sets, dict) or not isinstance(context, dict):
-        return {'decision': 'unknown', 'matched_statements': [], 'limits': ['Invalid policy inventory or request context'], 'runtime_verified': False}
-    if not principal or not query.get('action') or not query.get('resource'):
-        reasons.append('An explicit principal, action and resource are required')
+        return unknown('Invalid policy inventory or request context')
+    if any(not isinstance(query.get(key), str) or not query[key].strip()
+            or '${' in query[key] or any(char in query[key] for char in '*?')
+            for key in ('principal', 'action', 'resource')):
+        return unknown('A concrete principal, action and resource are required')
+    if query.get('principal_type', 'iam_user') != 'iam_user' or not re.fullmatch(r'arn:[^:]+:iam::\d{12}:user/.+', principal):
+        return unknown('Role-session/resource-policy exceptions require an external IAM evaluator')
+    allowed_groups = {'identity', 'resource', 'boundaries', 'scp', 'rcp', 'session'}
+    if any(group not in allowed_groups for group in sets):
+        return unknown('Unsupported policy set')
+    levels = query.get('policy_levels', {})
+    if not isinstance(levels, dict) or any(group not in {'scp', 'rcp'} for group in levels):
+        return unknown('Invalid organization policy levels')
+    sets = dict(sets)
+    level_sizes = {}
+    for group, attachments in levels.items():
+        if group in sets or not isinstance(attachments, list) or not attachments:
+            return unknown('Supply organization policies once, grouped by attachment level')
+        flattened, sizes = [], []
+        seen = set()
+        for attachment in attachments:
+            if not isinstance(attachment, dict) or not isinstance(attachment.get('id'), str) or not attachment['id'] or attachment['id'] in seen:
+                return unknown('Organization attachment levels need unique identifiers')
+            policies = attachment.get('policies')
+            if not isinstance(policies, list) or not policies:
+                return unknown('Organization attachment level has no supplied policies')
+            seen.add(attachment['id'])
+            flattened.extend(policies)
+            sizes.append(len(policies))
+        sets[group], level_sizes[group] = flattened, sizes
 
     def glob(actual, patterns, fold=False):
-        return any(fnmatch.fnmatchcase(str(actual).lower() if fold else str(actual),
-            str(p).lower() if fold else str(p)) for p in values(patterns))
+        # IAM wildcards are * and ?, not shell character classes such as [ab].
+        return any(re.fullmatch(re.escape(str(pattern)).replace(r'\*', '.*').replace(r'\?', '.'),
+            str(actual), flags=re.I if fold else 0) is not None for pattern in values(patterns))
 
-    def statement_matches(statement):
-        if statement.get('Effect') not in {'Allow', 'Deny'}:
+    def statement_matches(statement, group):
+        if statement.get('Effect') not in ('Allow', 'Deny'):
             return None
         if 'NotPrincipal' in statement or '${' in json.dumps(statement):
             return None
@@ -138,23 +171,32 @@ def evaluate_access(query: dict) -> dict:
         for field, actual, fold in [('Action', query.get('action'), True), ('Resource', query.get('resource'), False)]:
             if not actual or (field not in statement and 'Not' + field not in statement):
                 return None
+            selected = statement.get(field, statement.get('Not' + field))
+            if not values(selected) or any(not isinstance(value, str) or not value for value in values(selected)):
+                return None
             if field in statement and not glob(actual, statement[field], fold):
                 return False
             if 'Not' + field in statement and glob(actual, statement['Not' + field], fold):
                 return False
         declared = statement.get('Principal')
+        if group == 'resource' and declared is None:
+            return None
+        if group != 'resource' and declared is not None:
+            return None
         if declared is not None:
             if isinstance(declared, dict):
                 if set(declared) != {'AWS'}:
                     return None
                 declared = declared['AWS']
+            if not values(declared) or any(not isinstance(value, str) or not value for value in values(declared)):
+                return None
             if any(re.fullmatch(r'\d{12}', str(v)) or str(v).endswith(':root') or ('*' in str(v) and v != '*') for v in values(declared)):
                 return None
             if not principal:
                 return None
             if not glob(principal, declared):
                 return False
-        conditions = statement.get('Condition') or {}
+        conditions = statement.get('Condition', {})
         if not isinstance(conditions, dict):
             return None
         for operator, terms in conditions.items():
@@ -165,8 +207,14 @@ def evaluate_access(query: dict) -> dict:
             for key, expected in terms.items():
                 if key not in context:
                     return None
+                if not isinstance(context[key], (str, bool, int, float)):
+                    return None
+                if not values(expected) or any(not isinstance(item, (str, bool, int, float)) for item in values(expected)):
+                    return None
                 actual = str(context[key]).lower() if operator == 'Bool' else str(context[key])
                 expected = [str(v).lower() if operator == 'Bool' else str(v) for v in values(expected)]
+                if operator == 'Bool' and (actual not in {'true', 'false'} or not set(expected) <= {'true', 'false'}):
+                    return None
                 matched = glob(actual, expected) if operator.endswith('Like') else actual in expected
                 if not matched:
                     return False
@@ -183,7 +231,7 @@ def evaluate_access(query: dict) -> dict:
                 if not isinstance(statement, dict):
                     reasons.append('Invalid policy statement')
                     continue
-                state = statement_matches(statement)
+                state = statement_matches(statement, group)
                 if state is None:
                     reasons.append(f'{group}[{index}] has unresolved statement semantics')
                 elif state:
@@ -193,21 +241,39 @@ def evaluate_access(query: dict) -> dict:
                     allowed |= statement.get('Effect') == 'Allow'
             results.append(allowed)
         group_results[group] = results
-    if query.get('principal_type', 'iam_user') != 'iam_user':
-        reasons.append('Role-session/resource-policy exceptions require an external IAM evaluator')
     if any(group_results.get('resource', [])) and any(group in sets for group in ('boundaries', 'session')):
         reasons.append('Resource grants interacting with boundaries or session policies require an external IAM evaluator')
-    if not query.get('policy_inventory_complete'):
+    if query.get('policy_inventory_complete') is not True:
         reasons.append('The full policy inventory has not been supplied')
-    if any(group not in {'identity', 'resource', 'boundaries', 'scp', 'rcp', 'session'} for group in sets):
-        reasons.append('Unsupported policy set')
+    for group in ('scp', 'rcp'):
+        if len(group_results.get(group, [])) > 1 and group not in level_sizes:
+            reasons.append(f'{group} attachment levels are required; policies at one level are not independent ceilings')
+    if len(group_results.get('boundaries', [])) > 1:
+        reasons.append('An IAM identity has at most one permissions boundary')
+    if 'session' in sets:
+        reasons.append('Session policy semantics require a supported session principal evaluator')
+    if query['action'].lower().startswith(('kms:', 'sts:')):
+        reasons.append('KMS key policies/grants and STS trust/session rules require a service-specific evaluator')
     if reasons:
         return {'decision': 'unknown', 'matched_statements': matches, 'limits': sorted(set(reasons)), 'runtime_verified': False}
     allowed = any(group_results.get('identity', [])) or any(group_results.get('resource', []))
-    if query.get('cross_account'):
+    principal_account = principal.split(':')[4]
+    resource_parts = query['resource'].split(':')
+    resource_account = resource_parts[4] if len(resource_parts) > 5 and resource_parts[0] == 'arn' else ''
+    if query.get('cross_account') is True or (resource_account and principal_account != resource_account):
         allowed = any(group_results.get('identity', [])) and any(group_results.get('resource', []))
     for group in ('boundaries', 'scp', 'rcp', 'session'):
         if group in group_results:
-            allowed &= bool(group_results[group]) and all(group_results[group])
+            results = group_results[group]
+            if group in level_sizes:
+                offset, ceilings = 0, []
+                for size in level_sizes[group]:
+                    ceilings.append(any(results[offset:offset + size]))
+                    offset += size
+                allowed &= all(ceilings)
+            elif group == 'session':
+                allowed &= any(results)
+            else:
+                allowed &= bool(results) and all(results)
     return {'decision': 'allowed_in_supplied_policies' if allowed else 'implicit_deny',
         'matched_statements': matches, 'limits': ['Static IAM-user subset; deployment and service-specific policy layers are not verified.'], 'runtime_verified': False}

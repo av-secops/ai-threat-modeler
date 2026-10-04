@@ -6,17 +6,24 @@ run a separate threat engine or publish findings before analysis.
 
 ## Working with a model
 
-1. Enter the architecture or upload files, then open the review draft.
-2. Check the architecture table and diagram. Correct component types, trust and
+1. Select application type, enter the architecture or upload files, then open the review draft.
+2. Complete the pre-DFD questionnaire. Confirm source suggestions or record Unknown
+   with a reason. Generate DFD is enabled only after the server verifies completion.
+3. Check the architecture table and diagram. Correct component types, trust and
    data classification; edit flow endpoints, protocol and data; confirm or exclude
    assumed connections. New components and flows can be added here.
-3. Answer the priority clarifications. Each answer is scoped to its component or
+4. Answer additional priority clarifications. Each answer is scoped to its component or
    flow and records an explanation, reviewer and optional supporting source.
    Unknown is a valid answer. A proposed scope exception does not suppress a rule.
-4. The tables and diagram update automatically after changes. Once the preview
+5. The tables and diagram update automatically after changes. Once the preview
    finishes updating, analyze the reviewed model.
-5. Use Update this model to add context or replace sources. Successful runs append
+6. Use Update this model to add context or replace sources. Successful runs append
    report revisions; failed requests keep the last report and current draft.
+
+See [assessment workflow](assessment-workflow.md) for questionnaire administration,
+diagram imports, persistent flow numbers and server-side report reviews. New
+governed reports conservatively start review again; earlier decisions remain in
+their original report rather than being treated as fresh verification.
 
 Adding or removing a component or flow starts a preview update immediately.
 Typing is debounced, and superseded responses cannot overwrite newer edits.

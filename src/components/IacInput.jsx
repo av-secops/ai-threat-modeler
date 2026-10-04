@@ -31,7 +31,9 @@ const IacInput = ({ onAnalyze, isAnalyzing }) => {
 
         // Auto-detect format from filename.
         const filename = file.name.toLowerCase();
-        if (filename.endsWith('.tf') || filename.endsWith('.tfvars')) {
+        if (filename === 'dockerfile' || filename.startsWith('dockerfile.') || filename.endsWith('.dockerfile')) {
+            setFormatHint('dockerfile');
+        } else if (filename.endsWith('.tf') || filename.endsWith('.tfvars')) {
             setFormatHint('terraform');
         } else if (filename.includes('cloudformation') || filename.includes('cfn')) {
             setFormatHint('cloudformation');
@@ -87,7 +89,7 @@ const IacInput = ({ onAnalyze, isAnalyzing }) => {
                                     {projectFiles.length > 1 ? `${projectFiles.length} project files selected` : projectFiles[0]?.name || 'Drop IaC files or click to browse'}
                                 </span>
                             </span>
-                            <input type="file" name="file_upload" className="hidden" multiple accept=".yaml,.yml,.json,.tf,.tfvars,.hcl,.bicep,.ts,.js,.py" onChange={handleFileUpload} />
+                            <input type="file" name="file_upload" className="hidden" multiple onChange={handleFileUpload} />
                         </label>
                     </div>
                     
@@ -101,6 +103,7 @@ const IacInput = ({ onAnalyze, isAnalyzing }) => {
                         >
                             <option value="auto">Auto-detect</option>
                             <option value="docker-compose">Docker Compose</option>
+                            <option value="dockerfile">Dockerfile</option>
                             <option value="kubernetes">Kubernetes</option>
                             <option value="helm">Helm template</option>
                             <option value="terraform">Terraform</option>

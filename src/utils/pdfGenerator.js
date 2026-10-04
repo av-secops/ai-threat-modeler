@@ -1,5 +1,6 @@
 import jsPDF from 'jspdf';
 import mermaid from 'mermaid';
+import { diagramQuality } from './diagramQuality';
 
 const COLORS = {
     ink: [23, 31, 46],
@@ -28,15 +29,19 @@ const LENS_THEME = {
     low: { fill: [220, 252, 231], ink: [22, 101, 52] },
 };
 
-export const generateReport = async (data, projectName, reviewStates = {}) => {
+export const generateReport = async (data, projectName, reviewStates = {}, { draft = false } = {}) => {
     try {
         if (!data) {
-            alert('No data to export.');
-            return;
+            throw new Error('No data to export.');
         }
         const qualityGate = data.engine_status?.quality_gate || {};
-        const publicationLabel = qualityGate.publication_status === 'ready' ? 'Publication ready' : 'Technical review';
-        if (qualityGate.status === 'blocked' || qualityGate.publication_status === 'blocked') {
+        const scoreAvailable = diagramQuality(data).score_available && Number.isFinite(data.score);
+        if (!draft && !scoreAvailable) {
+            throw new Error('Architecture extraction incomplete. Review image-derived components and connectors before exporting a final report.');
+        }
+        const publicationLabel = draft ? 'DRAFT - NOT FOR SIGN-OFF'
+            : qualityGate.publication_status === 'ready' ? 'Publication ready' : 'Technical review';
+        if (!draft && (qualityGate.status === 'blocked' || qualityGate.publication_status === 'blocked')) {
             const reasons = (qualityGate.integrity_violations || [])
                 .map((item) => item.detail)
                 .join(' ');
@@ -65,10 +70,10 @@ export const generateReport = async (data, projectName, reviewStates = {}) => {
         const included = allThreats.filter((t) => reviewStates[t.id] !== 'false_positive');
         const confirmed = included.filter((t) => String(t.tier).toLowerCase() === 'confirmed');
         const potential = included.filter((t) => String(t.tier).toLowerCase() !== 'confirmed');
-        const score = data.score || 0;
+        const score = scoreAvailable ? data.score : null;
         const aiLens = data.ai_security_lens || { overview: '', items: [] };
         const priorityActions = Object.values(reviewStates).some((state) => state !== 'open')
-            ? included.filter((t) => !['mitigated', 'accepted'].includes(reviewStates[t.id]) && t.finding_type !== 'validation_question').slice(0, 3).map((t) => ({
+            ? included.filter((t) => !['mitigated', 'accepted', 'verified_fixed', 'false_positive'].includes(reviewStates[t.id]) && t.finding_type !== 'validation_question').slice(0, 3).map((t) => ({
                 title: t.title, priority: t.severity, why_now: `${t.tier} finding; ${t.severity} severity.`,
                 action: t.mitigation, focus_area: t.affected_components,
             }))
@@ -96,9 +101,14 @@ export const generateReport = async (data, projectName, reviewStates = {}) => {
             doc.setFont('helvetica', style);
             doc.setTextColor(...color);
             const lines = doc.splitTextToSize(String(text || ''), maxWidth);
-            doc.text(lines, x, y);
-            y += Math.max(lines.length, 1) * leading;
-            checkPageBreak(0);
+            for (const line of lines.length ? lines : ['']) {
+                checkPageBreak(leading);
+                doc.setFontSize(size);
+                doc.setFont('helvetica', style);
+                doc.setTextColor(...color);
+                doc.text(line, x, y);
+                y += leading;
+            }
         };
 
         const drawSectionTitle = (title, subtitle) => {
@@ -169,7 +179,7 @@ export const generateReport = async (data, projectName, reviewStates = {}) => {
             doc.setFontSize(7.5);
             doc.setFont('helvetica', 'bold');
             doc.setTextColor(...COLORS.brand);
-            doc.text('Aegis Threat Report', left, 7);
+            doc.text(draft ? 'Aegis Threat Report - DRAFT' : 'Aegis Threat Report', left, 7);
 
             doc.setFont('helvetica', 'normal');
             doc.setTextColor(...COLORS.muted);
@@ -202,9 +212,9 @@ export const generateReport = async (data, projectName, reviewStates = {}) => {
             doc.setDrawColor(...scoreColor);
             doc.roundedRect(pageWidth - 52, 10, 38, 23, 1.5, 1.5, 'FD');
             doc.setFont('helvetica', 'bold');
-            doc.setFontSize(16);
+            doc.setFontSize(scoreAvailable ? 16 : 11);
             doc.setTextColor(...COLORS.ink);
-            doc.text(`${score}/100`, pageWidth - 33, 21.5, { align: 'center' });
+            doc.text(scoreAvailable ? `${score}/100` : 'Not assessed', pageWidth - 33, 21.5, { align: 'center' });
             doc.setFontSize(7);
             doc.setFont('helvetica', 'normal');
             doc.setTextColor(...COLORS.muted);
@@ -543,7 +553,7 @@ export const generateReport = async (data, projectName, reviewStates = {}) => {
                 doc.setFontSize(7);
                 doc.setTextColor(...COLORS.muted);
                 doc.setFont('helvetica', 'normal');
-                doc.text(`Aegis Threat | ${projectName || 'Untitled Project'}`, left, pageHeight - 8.4);
+                doc.text(draft ? 'DRAFT - NOT FOR SIGN-OFF' : `Aegis Threat | ${projectName || 'Untitled Project'}`, left, pageHeight - 8.4);
                 doc.text(`Page ${i} / ${pages}`, pageWidth - right, pageHeight - 8.4, { align: 'right' });
                 doc.text(new Date().toLocaleDateString(), pageWidth / 2, pageHeight - 8.4, { align: 'center' });
             }
@@ -551,6 +561,12 @@ export const generateReport = async (data, projectName, reviewStates = {}) => {
 
         drawCover();
         drawSectionTitle('Assessment Summary');
+        if (draft) {
+            writeText('DRAFT: Findings and architecture are provisional. This report is for review, not security sign-off.', { size: 10, color: COLORS.danger });
+            const reasons = [...(diagramQuality(data).reasons || []),
+                ...(qualityGate.integrity_violations || []).map(item => item.detail)];
+            for (const reason of new Set(reasons.filter(Boolean))) writeText(reason, { size: 8, color: COLORS.muted });
+        }
         writeText(excluded.length
             ? `${confirmed.length} confirmed risks and ${potential.length} potential risks after reviewer exclusions. ${excluded.length} ${excluded.length === 1 ? 'finding marked false positive is' : 'findings marked false positive are'} retained in the Reviewer Exclusions section.`
             : data.summary || 'No summary available.', { size: 9.5, color: COLORS.ink });
@@ -568,6 +584,38 @@ export const generateReport = async (data, projectName, reviewStates = {}) => {
         drawThreatSection('Confirmed Risks', confirmed, COLORS.brand);
         drawThreatSection('Potential Risks', potential, COLORS.warning);
         if (excluded.length) drawThreatSection('Reviewer Exclusions', excluded, COLORS.muted);
+        if (data.engine_status?.assessment) {
+            checkPageBreak(60);
+            drawSectionTitle('Risk Register and Team Review', 'Findings and remarks are scoped to this assessment revision.');
+            for (const threat of allThreats) {
+                checkPageBreak(35);
+                writeText(`${threat.id}: ${threat.title}`, { size: 10, style: 'bold' });
+                writeText(`Severity: ${threat.severity} | Review: ${(reviewStates[threat.id] || 'pending_review').replaceAll('_', ' ')} | Source: ${threat.finding_type || 'architecture'}`, { size: 8, color: COLORS.muted });
+                writeText(`STRIDE: ${threat.stride_category || threat.category} | Risk score: ${threat.risk_score ?? 'Unspecified'}`, { size: 8 });
+                writeText(threat.description, { size: 8 });
+                writeText(`Components: ${(threat.affected_components || []).join(', ') || 'Not specified'}`, { size: 8 });
+                writeText(`DFD flows: ${threat.affected_flow_refs?.map(f => f.number || f.id).join(', ') || (threat.flow_reference_status === 'unresolved' ? 'Mapping requires review' : 'Not flow-specific')}`, { size: 8 });
+                writeText(`Security controls: ${threat.specific_control || threat.explanation?.matched_controls?.join(', ') || 'Mapping requires review'}`, { size: 8 });
+                for (const evidence of threat.evidence_details || []) writeText(`Evidence: ${[evidence.document, evidence.locator, evidence.statement].filter(Boolean).join(' / ')}`, { size: 8 });
+                if (!threat.evidence_details?.length) writeText('Supporting evidence: no source-level evidence captured.', { size: 8, color: COLORS.muted });
+                writeText(`Remediation: ${threat.mitigation || 'Not specified'}`, { size: 8 });
+                for (const criterion of threat.explanation?.remediation_validation?.criteria || []) {
+                    writeText(`Verification procedure (not performed): ${criterion.procedure}`, { size: 8 });
+                    writeText(`Acceptance condition: ${criterion.acceptance_condition}`, { size: 8 });
+                    writeText(`Required evidence: ${(criterion.required_evidence || []).join('; ')}`, { size: 8, color: COLORS.muted });
+                }
+                const events = (data.risk_review?.events || []).filter(event => event.finding_id === threat.id);
+                if (!events.length) writeText('Product Architect / Product Team remarks: Pending Review.', { size: 8, color: COLORS.muted });
+                for (const event of events) {
+                    writeText(`${event.author} (${event.author_role}), ${new Date(event.created_at * 1000).toLocaleString()}: ${event.remarks}`, { size: 8 });
+                    if (event.verification_evidence) writeText(`Verification: ${event.verification_evidence}`, { size: 8 });
+                    if (event.acceptance_expires_at) writeText(`Acceptance expiry: ${new Date(event.acceptance_expires_at).toLocaleString()}`, { size: 8 });
+                    for (const check of event.verification || []) writeText(`Review verification: ${check.method} / ${check.result} / ${check.checked_at} / ${check.reference}`, { size: 8 });
+                    for (const criterion of event.acceptance_criteria || []) writeText(`Reviewed acceptance criterion: ${criterion}`, { size: 8 });
+                }
+                y += 4;
+            }
+        }
         drawEvidenceRequests();
         const inventory = data.engine_status?.issue_inventory;
         if (inventory?.declared) {
@@ -580,9 +628,9 @@ export const generateReport = async (data, projectName, reviewStates = {}) => {
         }
 
         drawFooterOnAllPages();
-        doc.save(`${(projectName || 'Aegis_Threat_Report').replace(/\s+/g, '_')}.pdf`);
+        await doc.save(`${(projectName || 'Aegis_Threat_Report').replace(/\s+/g, '_')}${draft ? '_DRAFT' : ''}.pdf`, { returnPromise: true });
     } catch (error) {
         console.error('PDF Generation Error:', error);
-        alert(`PDF generation failed: ${error.message}`);
+        throw error;
     }
 };

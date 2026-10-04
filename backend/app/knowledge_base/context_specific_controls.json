@@ -1,0 +1,1790 @@
+[
+  {
+    "id": "CTX-AWS-LAMBDA-INVOKE",
+    "taxonomy_policy": "explicit_only",
+    "title": "Lambda invocation permissions lack caller restrictions",
+    "description": "A caller with invocation access can run a function under its execution identity when the resource policy does not restrict the intended principal and source.",
+    "resource_type": [
+      "ServerlessFunction",
+      "Lambda"
+    ],
+    "cloud_platform": [
+      "aws"
+    ],
+    "stride_category": "Elevation of Privilege",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-863"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "lambda_invocation_restriction",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "lambda_invocation_restriction"
+    ],
+    "mitigation": "Restrict principals and use applicable SourceArn and SourceAccount conditions for service invocations; review identity policies too.",
+    "verification": "Check the submitted function policy and verify an unintended caller is denied in a test account.",
+    "preconditions": [
+      "The scoped source explicitly states that lambda invocation restriction is absent in the described operation. Missing mention is not evidence of absence."
+    ],
+    "counterexamples": [
+      "Control present or applicability unestablished.",
+      "Only a topology label, a planned change, a conflicting statement or a claim about another environment."
+    ],
+    "mapping_rationale": "Elevation of Privilege describes the impact in this rule; CWE-863 describes the weakness, not a tested exploit.",
+    "references": [
+      "https://docs.aws.amazon.com/lambda/latest/dg/access-control-resource-based.html"
+    ],
+    "source": "Aegis context-specific control catalog",
+    "version": "1.0.0",
+    "review_status": "engineering_review_pending_independent_validation",
+    "last_reviewed": null,
+    "source_checked_at": "2026-10-03",
+    "source_version": "Living documentation; checked 2026-10-03",
+    "lifecycle": "active",
+    "tags": [
+      "aws",
+      "lambda_invocation_restriction"
+    ],
+    "test_contract": {
+      "control": "lambda_invocation_restriction",
+      "component_type": "ServerlessFunction",
+      "component_name": "Scoped workload",
+      "properties": {
+        "cloud_provider": "aws"
+      },
+      "cases": [
+        "positive",
+        "protected",
+        "unknown",
+        "conflicting",
+        "planned",
+        "partial",
+        "wrong_scope"
+      ]
+    }
+  },
+  {
+    "id": "CTX-AWS-PASSROLE",
+    "taxonomy_policy": "explicit_only",
+    "title": "Role passing is not limited to approved roles",
+    "description": "A deployment principal may attach a more privileged role to a workload when role passing is not scoped.",
+    "resource_type": [
+      "IAM",
+      "Identity",
+      "CI/CD",
+      "Pipeline"
+    ],
+    "cloud_platform": [
+      "aws"
+    ],
+    "stride_category": "Elevation of Privilege",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-269"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "iam_passrole_scope",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "iam_passrole_scope"
+    ],
+    "mitigation": "Limit iam:PassRole to approved role ARNs and intended services; evaluate permission boundaries and organization policies.",
+    "verification": "Test an approved and an unapproved role against the effective policy; do not infer effective permission from an Allow alone.",
+    "preconditions": [
+      "The scoped source explicitly states that iam passrole scope is absent in the described operation. Missing mention is not evidence of absence."
+    ],
+    "counterexamples": [
+      "Control present or applicability unestablished.",
+      "Only a topology label, a planned change, a conflicting statement or a claim about another environment."
+    ],
+    "mapping_rationale": "Elevation of Privilege describes the impact in this rule; CWE-269 describes the weakness, not a tested exploit.",
+    "references": [
+      "https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use_passrole.html"
+    ],
+    "source": "Aegis context-specific control catalog",
+    "version": "1.0.0",
+    "review_status": "engineering_review_pending_independent_validation",
+    "last_reviewed": null,
+    "source_checked_at": "2026-10-03",
+    "source_version": "Living documentation; checked 2026-10-03",
+    "lifecycle": "active",
+    "tags": [
+      "aws",
+      "iam_passrole_scope"
+    ],
+    "test_contract": {
+      "control": "iam_passrole_scope",
+      "component_type": "IAM",
+      "component_name": "Scoped workload",
+      "properties": {
+        "cloud_provider": "aws"
+      },
+      "cases": [
+        "positive",
+        "protected",
+        "unknown",
+        "conflicting",
+        "planned",
+        "partial",
+        "wrong_scope"
+      ]
+    }
+  },
+  {
+    "id": "CTX-AZURE-SAS",
+    "taxonomy_policy": "explicit_only",
+    "title": "Delegated storage tokens lack resource and permission scope",
+    "description": "An overbroad shared access signature can expose objects beyond the intended delegation.",
+    "resource_type": [
+      "StorageBucket",
+      "Object Storage"
+    ],
+    "cloud_platform": [
+      "azure"
+    ],
+    "stride_category": "Information Disclosure",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-863"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "sas_token_scope",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "sas_token_scope"
+    ],
+    "mitigation": "Scope SAS permissions and resources narrowly, use short validity and HTTPS, and document revocation.",
+    "verification": "Compare a read of the intended object with a write and a read of another object using a test token.",
+    "preconditions": [
+      "The scoped source explicitly states that sas token scope is absent in the described operation. Missing mention is not evidence of absence."
+    ],
+    "counterexamples": [
+      "Control present or applicability unestablished.",
+      "Only a topology label, a planned change, a conflicting statement or a claim about another environment."
+    ],
+    "mapping_rationale": "Information Disclosure describes the impact in this rule; CWE-863 describes the weakness, not a tested exploit.",
+    "references": [
+      "https://learn.microsoft.com/en-us/azure/storage/common/storage-sas-overview"
+    ],
+    "source": "Aegis context-specific control catalog",
+    "version": "1.0.0",
+    "review_status": "engineering_review_pending_independent_validation",
+    "last_reviewed": null,
+    "source_checked_at": "2026-10-03",
+    "source_version": "Living documentation; checked 2026-10-03",
+    "lifecycle": "active",
+    "tags": [
+      "azure",
+      "sas_token_scope"
+    ],
+    "test_contract": {
+      "control": "sas_token_scope",
+      "component_type": "StorageBucket",
+      "component_name": "Scoped workload",
+      "properties": {
+        "cloud_provider": "azure"
+      },
+      "cases": [
+        "positive",
+        "protected",
+        "unknown",
+        "conflicting",
+        "planned",
+        "partial",
+        "wrong_scope"
+      ]
+    }
+  },
+  {
+    "id": "CTX-GCP-IMPERSONATION",
+    "taxonomy_policy": "explicit_only",
+    "title": "Service account impersonation is not scoped",
+    "description": "A principal able to impersonate unrelated service accounts can inherit permissions outside its intended workload.",
+    "resource_type": [
+      "IAM",
+      "Identity",
+      "Service"
+    ],
+    "cloud_platform": [
+      "gcp"
+    ],
+    "stride_category": "Elevation of Privilege",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-269"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "service_account_impersonation_scope",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "service_account_impersonation_scope"
+    ],
+    "mitigation": "Restrict impersonation grants to specific accounts and trusted callers; review inherited grants and delegation chains.",
+    "verification": "Evaluate whether an unintended principal can obtain credentials for the service account without using production credentials.",
+    "preconditions": [
+      "The scoped source explicitly states that service account impersonation scope is absent in the described operation. Missing mention is not evidence of absence."
+    ],
+    "counterexamples": [
+      "Control present or applicability unestablished.",
+      "Only a topology label, a planned change, a conflicting statement or a claim about another environment."
+    ],
+    "mapping_rationale": "Elevation of Privilege describes the impact in this rule; CWE-269 describes the weakness, not a tested exploit.",
+    "references": [
+      "https://docs.cloud.google.com/iam/docs/best-practices-service-accounts"
+    ],
+    "source": "Aegis context-specific control catalog",
+    "version": "1.0.0",
+    "review_status": "engineering_review_pending_independent_validation",
+    "last_reviewed": null,
+    "source_checked_at": "2026-10-03",
+    "source_version": "Living documentation; checked 2026-10-03",
+    "lifecycle": "active",
+    "tags": [
+      "gcp",
+      "service_account_impersonation_scope"
+    ],
+    "test_contract": {
+      "control": "service_account_impersonation_scope",
+      "component_type": "IAM",
+      "component_name": "Scoped workload",
+      "properties": {
+        "cloud_provider": "gcp"
+      },
+      "cases": [
+        "positive",
+        "protected",
+        "unknown",
+        "conflicting",
+        "planned",
+        "partial",
+        "wrong_scope"
+      ]
+    }
+  },
+  {
+    "id": "CTX-K8S-ADMISSION",
+    "taxonomy_policy": "explicit_only",
+    "title": "Security admission webhook is configured to fail open",
+    "description": "A security-enforcing admission check can be bypassed during webhook errors if the relevant failure policy allows the request.",
+    "resource_type": [
+      "Kubernetes",
+      "Kubernetes Cluster",
+      "Admission Webhook"
+    ],
+    "cloud_platform": [],
+    "stride_category": "Tampering",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-636"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "admission_webhook_fail_closed",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "admission_webhook_fail_closed"
+    ],
+    "mitigation": "Use failurePolicy Fail for security-enforcing checks, scoped match conditions, timeouts and a highly available webhook.",
+    "verification": "In a test cluster, make the webhook unavailable and confirm a prohibited workload is denied; distinguish mutating conveniences from mandatory checks.",
+    "preconditions": [
+      "The scoped source explicitly states that admission webhook fail closed is absent in the described operation. Missing mention is not evidence of absence."
+    ],
+    "counterexamples": [
+      "Control present or applicability unestablished.",
+      "Only a topology label, a planned change, a conflicting statement or a claim about another environment."
+    ],
+    "mapping_rationale": "Tampering describes the impact in this rule; CWE-636 describes the weakness, not a tested exploit.",
+    "references": [
+      "https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/"
+    ],
+    "source": "Aegis context-specific control catalog",
+    "version": "1.0.0",
+    "review_status": "engineering_review_pending_independent_validation",
+    "last_reviewed": null,
+    "source_checked_at": "2026-10-03",
+    "source_version": "Living documentation; checked 2026-10-03",
+    "lifecycle": "active",
+    "tags": [
+      "k8s",
+      "admission_webhook_fail_closed"
+    ],
+    "test_contract": {
+      "control": "admission_webhook_fail_closed",
+      "component_type": "Kubernetes",
+      "component_name": "Scoped workload",
+      "properties": {},
+      "cases": [
+        "positive",
+        "protected",
+        "unknown",
+        "conflicting",
+        "planned",
+        "partial",
+        "wrong_scope"
+      ]
+    }
+  },
+  {
+    "id": "CTX-CI-OIDC",
+    "taxonomy_policy": "explicit_only",
+    "title": "CI federation does not restrict the workload subject",
+    "description": "A token issued to an unintended repository, branch or environment may obtain deployment credentials if the federated subject is not checked.",
+    "resource_type": [
+      "CI/CD",
+      "Pipeline"
+    ],
+    "cloud_platform": [],
+    "stride_category": "Spoofing",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-287"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "oidc_subject_binding",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "oidc_subject_binding"
+    ],
+    "mitigation": "Validate issuer, audience and provider-specific subject claims against approved repository and environment identities.",
+    "verification": "Present a token from an unapproved test branch or repository to the trust policy and verify denial.",
+    "preconditions": [
+      "The scoped source explicitly states that oidc subject binding is absent in the described operation. Missing mention is not evidence of absence."
+    ],
+    "counterexamples": [
+      "Control present or applicability unestablished.",
+      "Only a topology label, a planned change, a conflicting statement or a claim about another environment."
+    ],
+    "mapping_rationale": "Spoofing describes the impact in this rule; CWE-287 describes the weakness, not a tested exploit.",
+    "references": [
+      "https://docs.github.com/en/actions/concepts/security/openid-connect"
+    ],
+    "source": "Aegis context-specific control catalog",
+    "version": "1.0.0",
+    "review_status": "engineering_review_pending_independent_validation",
+    "last_reviewed": null,
+    "source_checked_at": "2026-10-03",
+    "source_version": "Living documentation; checked 2026-10-03",
+    "lifecycle": "active",
+    "tags": [
+      "ci",
+      "oidc_subject_binding"
+    ],
+    "test_contract": {
+      "control": "oidc_subject_binding",
+      "component_type": "CI/CD",
+      "component_name": "Scoped workload",
+      "properties": {},
+      "cases": [
+        "positive",
+        "protected",
+        "unknown",
+        "conflicting",
+        "planned",
+        "partial",
+        "wrong_scope"
+      ]
+    }
+  },
+  {
+    "id": "CTX-API-REDIRECT",
+    "taxonomy_policy": "explicit_only",
+    "title": "Outbound redirects are not revalidated",
+    "description": "A URL that initially passes validation can redirect the server toward a forbidden destination.",
+    "resource_type": [
+      "API",
+      "Service"
+    ],
+    "cloud_platform": [],
+    "stride_category": "Information Disclosure",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-918"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "outbound_redirect_validation",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "outbound_redirect_validation"
+    ],
+    "mitigation": "Disable automatic redirects or validate every redirect target and resolved address against an egress policy.",
+    "verification": "Use a controlled redirect to a disallowed test address; confirm the redirected connection is not attempted.",
+    "preconditions": [
+      "The scoped source explicitly states that outbound redirect validation is absent in the described operation. Missing mention is not evidence of absence."
+    ],
+    "counterexamples": [
+      "Control present or applicability unestablished.",
+      "Only a topology label, a planned change, a conflicting statement or a claim about another environment."
+    ],
+    "mapping_rationale": "Information Disclosure describes the impact in this rule; CWE-918 describes the weakness, not a tested exploit.",
+    "references": [
+      "https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html"
+    ],
+    "source": "Aegis context-specific control catalog",
+    "version": "1.0.0",
+    "review_status": "engineering_review_pending_independent_validation",
+    "last_reviewed": null,
+    "source_checked_at": "2026-10-03",
+    "source_version": "Living documentation; checked 2026-10-03",
+    "lifecycle": "active",
+    "tags": [
+      "api",
+      "outbound_redirect_validation"
+    ],
+    "test_contract": {
+      "control": "outbound_redirect_validation",
+      "component_type": "API",
+      "component_name": "Scoped workload",
+      "properties": {},
+      "cases": [
+        "positive",
+        "protected",
+        "unknown",
+        "conflicting",
+        "planned",
+        "partial",
+        "wrong_scope"
+      ]
+    }
+  },
+  {
+    "id": "CTX-WEB-MESSAGE",
+    "taxonomy_policy": "explicit_only",
+    "title": "Browser message handlers do not verify sender origin",
+    "description": "A different origin may send a message that the application mistakes for a trusted frame or window.",
+    "resource_type": [
+      "Frontend",
+      "Web Application",
+      "UI"
+    ],
+    "cloud_platform": [],
+    "stride_category": "Spoofing",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-346"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "postmessage_origin_validation",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "postmessage_origin_validation"
+    ],
+    "mitigation": "Check exact event.origin and expected event.source before parsing messages; send to an exact targetOrigin.",
+    "verification": "Send a harmless message from an unrelated test origin and verify the handler rejects it.",
+    "preconditions": [
+      "The scoped source explicitly states that postmessage origin validation is absent in the described operation. Missing mention is not evidence of absence."
+    ],
+    "counterexamples": [
+      "Control present or applicability unestablished.",
+      "Only a topology label, a planned change, a conflicting statement or a claim about another environment."
+    ],
+    "mapping_rationale": "Spoofing describes the impact in this rule; CWE-346 describes the weakness, not a tested exploit.",
+    "references": [
+      "https://cheatsheetseries.owasp.org/cheatsheets/HTML5_Security_Cheat_Sheet.html"
+    ],
+    "source": "Aegis context-specific control catalog",
+    "version": "1.0.0",
+    "review_status": "engineering_review_pending_independent_validation",
+    "last_reviewed": null,
+    "source_checked_at": "2026-10-03",
+    "source_version": "Living documentation; checked 2026-10-03",
+    "lifecycle": "active",
+    "tags": [
+      "web",
+      "postmessage_origin_validation"
+    ],
+    "test_contract": {
+      "control": "postmessage_origin_validation",
+      "component_type": "Frontend",
+      "component_name": "Scoped workload",
+      "properties": {},
+      "cases": [
+        "positive",
+        "protected",
+        "unknown",
+        "conflicting",
+        "planned",
+        "partial",
+        "wrong_scope"
+      ]
+    }
+  },
+  {
+    "id": "CTX-SAAS-QUERY-SCOPE",
+    "taxonomy_policy": "explicit_only",
+    "title": "Database queries lack server-bound tenant scope",
+    "description": "A query controlled by a tenant may return another tenant's rows when identity and query scope are not bound.",
+    "resource_type": [
+      "Database",
+      "API",
+      "Service"
+    ],
+    "cloud_platform": [],
+    "stride_category": "Information Disclosure",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-639"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "row_level_tenant_scope",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "row_level_tenant_scope"
+    ],
+    "mitigation": "Apply server-derived tenant filtering or correctly configured row-level security on every relevant query, including jobs and exports.",
+    "verification": "Use two test tenants and verify cross-tenant identifiers are rejected for reads, writes and exports.",
+    "preconditions": [
+      "The scoped source explicitly states that row level tenant scope is absent in the described operation. Missing mention is not evidence of absence."
+    ],
+    "counterexamples": [
+      "Control present or applicability unestablished.",
+      "Only a topology label, a planned change, a conflicting statement or a claim about another environment."
+    ],
+    "mapping_rationale": "Information Disclosure describes the impact in this rule; CWE-639 describes the weakness, not a tested exploit.",
+    "references": [
+      "https://cwe.mitre.org/data/definitions/639.html"
+    ],
+    "source": "Aegis context-specific control catalog",
+    "version": "1.0.0",
+    "review_status": "engineering_review_pending_independent_validation",
+    "last_reviewed": null,
+    "source_checked_at": "2026-10-03",
+    "source_version": "Living documentation; checked 2026-10-03",
+    "lifecycle": "active",
+    "tags": [
+      "saas",
+      "row_level_tenant_scope"
+    ],
+    "test_contract": {
+      "control": "row_level_tenant_scope",
+      "component_type": "Database",
+      "component_name": "Scoped workload",
+      "properties": {},
+      "cases": [
+        "positive",
+        "protected",
+        "unknown",
+        "conflicting",
+        "planned",
+        "partial",
+        "wrong_scope"
+      ]
+    }
+  },
+  {
+    "id": "CTX-RAG-DOCUMENT-ACL",
+    "taxonomy_policy": "explicit_only",
+    "title": "Retrieved documents are not checked against caller permissions",
+    "description": "Retrieval may disclose documents the caller cannot access when index filtering or post-retrieval checks omit document permissions.",
+    "resource_type": [
+      "ML Service",
+      "Agent",
+      "Vector Database"
+    ],
+    "cloud_platform": [],
+    "stride_category": "Information Disclosure",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-863"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "rag_document_authorization",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "rag_document_authorization"
+    ],
+    "mitigation": "Enforce caller and tenant ACLs before retrieval and before response assembly; invalidate cached access after permission changes.",
+    "verification": "Index documents for two test users, revoke one ACL, and verify retrieval and cached responses respect the change.",
+    "preconditions": [
+      "The scoped source explicitly states that rag document authorization is absent in the described operation. Missing mention is not evidence of absence."
+    ],
+    "counterexamples": [
+      "Control present or applicability unestablished.",
+      "Only a topology label, a planned change, a conflicting statement or a claim about another environment."
+    ],
+    "mapping_rationale": "Information Disclosure describes the impact in this rule; CWE-863 describes the weakness, not a tested exploit.",
+    "references": [
+      "https://cheatsheetseries.owasp.org/cheatsheets/LLM_Prompt_Injection_Prevention_Cheat_Sheet.html"
+    ],
+    "source": "Aegis context-specific control catalog",
+    "version": "1.0.0",
+    "review_status": "engineering_review_pending_independent_validation",
+    "last_reviewed": null,
+    "source_checked_at": "2026-10-03",
+    "source_version": "Living documentation; checked 2026-10-03",
+    "lifecycle": "active",
+    "tags": [
+      "rag",
+      "rag_document_authorization"
+    ],
+    "test_contract": {
+      "control": "rag_document_authorization",
+      "component_type": "ML Service",
+      "component_name": "Scoped workload",
+      "properties": {},
+      "cases": [
+        "positive",
+        "protected",
+        "unknown",
+        "conflicting",
+        "planned",
+        "partial",
+        "wrong_scope"
+      ]
+    }
+  },
+  {
+    "id": "CTX-AI-TOOL-RESULT",
+    "taxonomy_policy": "explicit_only",
+    "title": "Agent tool results are trusted without validation",
+    "description": "Untrusted tool output may influence consequential actions when its structure and intended data role are not validated.",
+    "resource_type": [
+      "ML Service",
+      "Agent",
+      "MCP Client"
+    ],
+    "cloud_platform": [],
+    "stride_category": "Tampering",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-20"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "tool_result_validation",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "tool_result_validation"
+    ],
+    "mitigation": "Validate tool output schemas, keep tool text separate from instructions and reauthorize consequential actions at execution.",
+    "verification": "Return malformed and instruction-bearing data from a test tool; it must not authorize or trigger an unapproved action.",
+    "preconditions": [
+      "The scoped source explicitly states that tool result validation is absent in the described operation. Missing mention is not evidence of absence."
+    ],
+    "counterexamples": [
+      "Control present or applicability unestablished.",
+      "Only a topology label, a planned change, a conflicting statement or a claim about another environment."
+    ],
+    "mapping_rationale": "Tampering describes the impact in this rule; CWE-20 describes the weakness, not a tested exploit.",
+    "references": [
+      "https://cheatsheetseries.owasp.org/cheatsheets/LLM_Prompt_Injection_Prevention_Cheat_Sheet.html"
+    ],
+    "source": "Aegis context-specific control catalog",
+    "version": "1.0.0",
+    "review_status": "engineering_review_pending_independent_validation",
+    "last_reviewed": null,
+    "source_checked_at": "2026-10-03",
+    "source_version": "Living documentation; checked 2026-10-03",
+    "lifecycle": "active",
+    "tags": [
+      "ai",
+      "tool_result_validation"
+    ],
+    "test_contract": {
+      "control": "tool_result_validation",
+      "component_type": "ML Service",
+      "component_name": "Scoped workload",
+      "properties": {},
+      "cases": [
+        "positive",
+        "protected",
+        "unknown",
+        "conflicting",
+        "planned",
+        "partial",
+        "wrong_scope"
+      ]
+    }
+  },
+  {
+    "id": "CTX-MCP-TOKEN",
+    "taxonomy_policy": "explicit_only",
+    "title": "MCP server accepts token passthrough",
+    "description": "Forwarding a token intended for another service can bypass the MCP server's authorization boundary.",
+    "resource_type": [
+      "MCP Server"
+    ],
+    "cloud_platform": [],
+    "stride_category": "Elevation of Privilege",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-863"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "mcp_token_passthrough_blocking",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "mcp_token_passthrough_blocking"
+    ],
+    "mitigation": "Accept only tokens intended for this MCP server and use independently scoped downstream credentials; reject token passthrough.",
+    "verification": "Submit a test token with another resource audience and verify the MCP server rejects it before downstream calls.",
+    "preconditions": [
+      "The scoped source explicitly states that mcp token passthrough blocking is absent in the described operation. Missing mention is not evidence of absence."
+    ],
+    "counterexamples": [
+      "Control present or applicability unestablished.",
+      "Only a topology label, a planned change, a conflicting statement or a claim about another environment."
+    ],
+    "mapping_rationale": "Elevation of Privilege describes the impact in this rule; CWE-863 describes the weakness, not a tested exploit.",
+    "references": [
+      "https://modelcontextprotocol.io/docs/2026-07-28/tutorials/security/security_best_practices"
+    ],
+    "source": "Aegis context-specific control catalog",
+    "version": "1.0.0",
+    "review_status": "engineering_review_pending_independent_validation",
+    "last_reviewed": null,
+    "source_checked_at": "2026-10-03",
+    "source_version": "MCP 2026-07-28",
+    "lifecycle": "active",
+    "tags": [
+      "mcp",
+      "mcp_token_passthrough_blocking"
+    ],
+    "test_contract": {
+      "control": "mcp_token_passthrough_blocking",
+      "component_type": "MCP Server",
+      "component_name": "Scoped workload",
+      "properties": {},
+      "cases": [
+        "positive",
+        "protected",
+        "unknown",
+        "conflicting",
+        "planned",
+        "partial",
+        "wrong_scope"
+      ]
+    }
+  },
+  {
+    "id": "CTX-MCP-CONSENT",
+    "taxonomy_policy": "explicit_only",
+    "title": "MCP authorization consent is not bound to the client",
+    "description": "An intermediary can become a confused deputy when consent or authorization state is not tied to the requesting client.",
+    "resource_type": [
+      "MCP Server",
+      "MCP Proxy"
+    ],
+    "cloud_platform": [],
+    "stride_category": "Spoofing",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-346"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "mcp_client_binding",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "mcp_client_binding"
+    ],
+    "mitigation": "Bind authorization state, consent and redirect URIs to the registered client and user; reject mismatches.",
+    "verification": "Attempt a client-ID or redirect substitution in a test authorization flow and verify it cannot reuse another client's consent.",
+    "preconditions": [
+      "The scoped source explicitly states that mcp client binding is absent in the described operation. Missing mention is not evidence of absence."
+    ],
+    "counterexamples": [
+      "Control present or applicability unestablished.",
+      "Only a topology label, a planned change, a conflicting statement or a claim about another environment."
+    ],
+    "mapping_rationale": "Spoofing describes the impact in this rule; CWE-346 describes the weakness, not a tested exploit.",
+    "references": [
+      "https://modelcontextprotocol.io/docs/2026-07-28/tutorials/security/security_best_practices"
+    ],
+    "source": "Aegis context-specific control catalog",
+    "version": "1.0.0",
+    "review_status": "engineering_review_pending_independent_validation",
+    "last_reviewed": null,
+    "source_checked_at": "2026-10-03",
+    "source_version": "MCP 2026-07-28",
+    "lifecycle": "active",
+    "tags": [
+      "mcp",
+      "mcp_client_binding"
+    ],
+    "test_contract": {
+      "control": "mcp_client_binding",
+      "component_type": "MCP Server",
+      "component_name": "Scoped workload",
+      "properties": {},
+      "cases": [
+        "positive",
+        "protected",
+        "unknown",
+        "conflicting",
+        "planned",
+        "partial",
+        "wrong_scope"
+      ]
+    }
+  },
+  {
+    "id": "CTX-AGENT-APPROVAL",
+    "taxonomy_policy": "explicit_only",
+    "title": "Agent approvals are not bound to the executed action",
+    "description": "An approved action may change its target or arguments before execution if approval is not bound to the exact request.",
+    "resource_type": [
+      "ML Service",
+      "Agent"
+    ],
+    "cloud_platform": [],
+    "stride_category": "Elevation of Privilege",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-367"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "tool_approval_binding",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "tool_approval_binding"
+    ],
+    "mitigation": "Bind approval to the tool, arguments, identity and expiry; revalidate immediately before execution.",
+    "verification": "Modify an approved test action's recipient or arguments and verify a new approval is required.",
+    "preconditions": [
+      "The scoped source explicitly states that tool approval binding is absent in the described operation. Missing mention is not evidence of absence."
+    ],
+    "counterexamples": [
+      "Control present or applicability unestablished.",
+      "Only a topology label, a planned change, a conflicting statement or a claim about another environment."
+    ],
+    "mapping_rationale": "Elevation of Privilege describes the impact in this rule; CWE-367 describes the weakness, not a tested exploit.",
+    "references": [
+      "https://cheatsheetseries.owasp.org/cheatsheets/Transaction_Authorization_Cheat_Sheet.html"
+    ],
+    "source": "Aegis context-specific control catalog",
+    "version": "1.0.0",
+    "review_status": "engineering_review_pending_independent_validation",
+    "last_reviewed": null,
+    "source_checked_at": "2026-10-03",
+    "source_version": "Living documentation; checked 2026-10-03",
+    "lifecycle": "active",
+    "tags": [
+      "agent",
+      "tool_approval_binding"
+    ],
+    "test_contract": {
+      "control": "tool_approval_binding",
+      "component_type": "ML Service",
+      "component_name": "Scoped workload",
+      "properties": {},
+      "cases": [
+        "positive",
+        "protected",
+        "unknown",
+        "conflicting",
+        "planned",
+        "partial",
+        "wrong_scope"
+      ]
+    }
+  },
+  {
+    "id": "CTX-PAY-WEBHOOK-SCOPE",
+    "taxonomy_policy": "explicit_only",
+    "title": "Payment callbacks lack business-object binding",
+    "description": "A correctly signed payment event can still affect the wrong order if account, transaction and order ownership are not verified.",
+    "resource_type": [
+      "API",
+      "Service",
+      "Payment Service"
+    ],
+    "cloud_platform": [],
+    "stride_category": "Tampering",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-863"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "webhook_business_binding",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "webhook_business_binding"
+    ],
+    "mitigation": "Verify the provider signature and then bind account, event, payment state, amount and currency to the server-owned order.",
+    "verification": "Replay a valid test event against a different tenant or order; verify no fulfillment occurs.",
+    "preconditions": [
+      "The scoped source explicitly states that webhook business binding is absent in the described operation. Missing mention is not evidence of absence."
+    ],
+    "counterexamples": [
+      "Control present or applicability unestablished.",
+      "Only a topology label, a planned change, a conflicting statement or a claim about another environment."
+    ],
+    "mapping_rationale": "Tampering describes the impact in this rule; CWE-863 describes the weakness, not a tested exploit.",
+    "references": [
+      "https://docs.stripe.com/webhooks"
+    ],
+    "source": "Aegis context-specific control catalog",
+    "version": "1.0.0",
+    "review_status": "engineering_review_pending_independent_validation",
+    "last_reviewed": null,
+    "source_checked_at": "2026-10-03",
+    "source_version": "Living documentation; checked 2026-10-03",
+    "lifecycle": "active",
+    "tags": [
+      "pay",
+      "webhook_business_binding"
+    ],
+    "test_contract": {
+      "control": "webhook_business_binding",
+      "component_type": "API",
+      "component_name": "Scoped workload",
+      "properties": {},
+      "cases": [
+        "positive",
+        "protected",
+        "unknown",
+        "conflicting",
+        "planned",
+        "partial",
+        "wrong_scope"
+      ]
+    }
+  },
+  {
+    "id": "CTX-PAY-REFUND-LIMIT",
+    "taxonomy_policy": "explicit_only",
+    "title": "Refund operations do not enforce cumulative limits",
+    "description": "Repeated or concurrent refunds can exceed a captured amount when cumulative limits are not enforced atomically.",
+    "resource_type": [
+      "API",
+      "Service",
+      "Payment Service"
+    ],
+    "cloud_platform": [],
+    "stride_category": "Tampering",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-841"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "refund_limit_enforcement",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "refund_limit_enforcement"
+    ],
+    "mitigation": "Enforce authorization, idempotency and cumulative captured-minus-refunded limits atomically; reconcile with provider state.",
+    "verification": "Submit concurrent partial refunds in a sandbox and verify the total cannot exceed the refundable balance.",
+    "preconditions": [
+      "The scoped source explicitly states that refund limit enforcement is absent in the described operation. Missing mention is not evidence of absence."
+    ],
+    "counterexamples": [
+      "Control present or applicability unestablished.",
+      "Only a topology label, a planned change, a conflicting statement or a claim about another environment."
+    ],
+    "mapping_rationale": "Tampering describes the impact in this rule; CWE-841 describes the weakness, not a tested exploit.",
+    "references": [
+      "https://cheatsheetseries.owasp.org/cheatsheets/Transaction_Authorization_Cheat_Sheet.html"
+    ],
+    "source": "Aegis context-specific control catalog",
+    "version": "1.0.0",
+    "review_status": "engineering_review_pending_independent_validation",
+    "last_reviewed": null,
+    "source_checked_at": "2026-10-03",
+    "source_version": "Living documentation; checked 2026-10-03",
+    "lifecycle": "active",
+    "tags": [
+      "pay",
+      "refund_limit_enforcement"
+    ],
+    "test_contract": {
+      "control": "refund_limit_enforcement",
+      "component_type": "API",
+      "component_name": "Scoped workload",
+      "properties": {},
+      "cases": [
+        "positive",
+        "protected",
+        "unknown",
+        "conflicting",
+        "planned",
+        "partial",
+        "wrong_scope"
+      ]
+    }
+  },
+  {
+    "id": "CTX-PAY-CURRENCY",
+    "taxonomy_policy": "explicit_only",
+    "title": "Payment currency is not bound to the order",
+    "description": "A payment with an unexpected currency can be treated as settlement if the backend compares only a numeric amount.",
+    "resource_type": [
+      "API",
+      "Service",
+      "Payment Service"
+    ],
+    "cloud_platform": [],
+    "stride_category": "Tampering",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-20"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "payment_currency_validation",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "payment_currency_validation"
+    ],
+    "mitigation": "Bind amount, currency and minor-unit interpretation to the server-owned order and provider transaction.",
+    "verification": "Use sandbox events with the same numeric amount in a different currency; verify fulfillment is rejected.",
+    "preconditions": [
+      "The scoped source explicitly states that payment currency validation is absent in the described operation. Missing mention is not evidence of absence."
+    ],
+    "counterexamples": [
+      "Control present or applicability unestablished.",
+      "Only a topology label, a planned change, a conflicting statement or a claim about another environment."
+    ],
+    "mapping_rationale": "Tampering describes the impact in this rule; CWE-20 describes the weakness, not a tested exploit.",
+    "references": [
+      "https://cheatsheetseries.owasp.org/cheatsheets/Transaction_Authorization_Cheat_Sheet.html"
+    ],
+    "source": "Aegis context-specific control catalog",
+    "version": "1.0.0",
+    "review_status": "engineering_review_pending_independent_validation",
+    "last_reviewed": null,
+    "source_checked_at": "2026-10-03",
+    "source_version": "Living documentation; checked 2026-10-03",
+    "lifecycle": "active",
+    "tags": [
+      "pay",
+      "payment_currency_validation"
+    ],
+    "test_contract": {
+      "control": "payment_currency_validation",
+      "component_type": "API",
+      "component_name": "Scoped workload",
+      "properties": {},
+      "cases": [
+        "positive",
+        "protected",
+        "unknown",
+        "conflicting",
+        "planned",
+        "partial",
+        "wrong_scope"
+      ]
+    }
+  },
+  {
+    "id": "CTX-TEL-SUBSCRIBER",
+    "taxonomy_policy": "explicit_only",
+    "title": "Subscriber operations lack ownership authorization",
+    "description": "A caller may change another subscriber's services when subscriber identifiers are not checked against authorized account ownership.",
+    "resource_type": [
+      "API",
+      "Service",
+      "Provisioning Service"
+    ],
+    "cloud_platform": [],
+    "stride_category": "Elevation of Privilege",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-639"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "subscriber_authorization",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "subscriber_authorization"
+    ],
+    "mitigation": "Resolve the subscriber from authorized account scope and check each operation before provisioning.",
+    "verification": "Use two test subscriber accounts and verify cross-account plan, SIM and service changes are denied.",
+    "preconditions": [
+      "The scoped source explicitly states that subscriber authorization is absent in the described operation. Missing mention is not evidence of absence."
+    ],
+    "counterexamples": [
+      "Control present or applicability unestablished.",
+      "Only a topology label, a planned change, a conflicting statement or a claim about another environment."
+    ],
+    "mapping_rationale": "Elevation of Privilege describes the impact in this rule; CWE-639 describes the weakness, not a tested exploit.",
+    "references": [
+      "https://cwe.mitre.org/data/definitions/639.html"
+    ],
+    "source": "Aegis context-specific control catalog",
+    "version": "1.0.0",
+    "review_status": "engineering_review_pending_independent_validation",
+    "last_reviewed": null,
+    "source_checked_at": "2026-10-03",
+    "source_version": "Living documentation; checked 2026-10-03",
+    "lifecycle": "active",
+    "tags": [
+      "tel",
+      "subscriber_authorization"
+    ],
+    "test_contract": {
+      "control": "subscriber_authorization",
+      "component_type": "API",
+      "component_name": "Scoped workload",
+      "properties": {},
+      "cases": [
+        "positive",
+        "protected",
+        "unknown",
+        "conflicting",
+        "planned",
+        "partial",
+        "wrong_scope"
+      ]
+    }
+  },
+  {
+    "id": "CTX-TEL-USAGE",
+    "taxonomy_policy": "explicit_only",
+    "title": "Usage records lack integrity validation",
+    "description": "Altered, duplicated or out-of-sequence usage events can affect charging when origin and record integrity are not validated.",
+    "resource_type": [
+      "Service",
+      "Queue",
+      "Stream",
+      "Billing Service"
+    ],
+    "cloud_platform": [],
+    "stride_category": "Tampering",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-345"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "usage_record_integrity",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "usage_record_integrity"
+    ],
+    "mitigation": "Authenticate event producers, validate schema and sequence, deduplicate immutable event IDs and reconcile totals.",
+    "verification": "Inject duplicate and modified synthetic usage events into a test pipeline; verify they cannot alter settled charges.",
+    "preconditions": [
+      "The scoped source explicitly states that usage record integrity is absent in the described operation. Missing mention is not evidence of absence."
+    ],
+    "counterexamples": [
+      "Control present or applicability unestablished.",
+      "Only a topology label, a planned change, a conflicting statement or a claim about another environment."
+    ],
+    "mapping_rationale": "Tampering describes the impact in this rule; CWE-345 describes the weakness, not a tested exploit.",
+    "references": [
+      "https://cwe.mitre.org/data/definitions/345.html"
+    ],
+    "source": "Aegis context-specific control catalog",
+    "version": "1.0.0",
+    "review_status": "engineering_review_pending_independent_validation",
+    "last_reviewed": null,
+    "source_checked_at": "2026-10-03",
+    "source_version": "Living documentation; checked 2026-10-03",
+    "lifecycle": "active",
+    "tags": [
+      "tel",
+      "usage_record_integrity"
+    ],
+    "test_contract": {
+      "control": "usage_record_integrity",
+      "component_type": "Service",
+      "component_name": "Scoped workload",
+      "properties": {},
+      "cases": [
+        "positive",
+        "protected",
+        "unknown",
+        "conflicting",
+        "planned",
+        "partial",
+        "wrong_scope"
+      ]
+    }
+  },
+  {
+    "id": "CTX-TEL-ENTITLEMENT",
+    "taxonomy_policy": "explicit_only",
+    "title": "Entitlement changes lack transition validation",
+    "description": "A request may skip payment, approval or eligibility steps when entitlement transitions are not validated.",
+    "resource_type": [
+      "API",
+      "Service",
+      "Provisioning Service"
+    ],
+    "cloud_platform": [],
+    "stride_category": "Tampering",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-841"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "entitlement_transition_validation",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "entitlement_transition_validation"
+    ],
+    "mitigation": "Enforce allowed state transitions and prerequisites atomically with account authorization and idempotency.",
+    "verification": "Attempt to activate a test entitlement from a disallowed state and verify it is rejected.",
+    "preconditions": [
+      "The scoped source explicitly states that entitlement transition validation is absent in the described operation. Missing mention is not evidence of absence."
+    ],
+    "counterexamples": [
+      "Control present or applicability unestablished.",
+      "Only a topology label, a planned change, a conflicting statement or a claim about another environment."
+    ],
+    "mapping_rationale": "Tampering describes the impact in this rule; CWE-841 describes the weakness, not a tested exploit.",
+    "references": [
+      "https://cwe.mitre.org/data/definitions/841.html"
+    ],
+    "source": "Aegis context-specific control catalog",
+    "version": "1.0.0",
+    "review_status": "engineering_review_pending_independent_validation",
+    "last_reviewed": null,
+    "source_checked_at": "2026-10-03",
+    "source_version": "Living documentation; checked 2026-10-03",
+    "lifecycle": "active",
+    "tags": [
+      "tel",
+      "entitlement_transition_validation"
+    ],
+    "test_contract": {
+      "control": "entitlement_transition_validation",
+      "component_type": "API",
+      "component_name": "Scoped workload",
+      "properties": {},
+      "cases": [
+        "positive",
+        "protected",
+        "unknown",
+        "conflicting",
+        "planned",
+        "partial",
+        "wrong_scope"
+      ]
+    }
+  },
+  {
+    "id": "CTX-MOBILE-LINK",
+    "taxonomy_policy": "explicit_only",
+    "title": "Mobile deep links lack destination validation",
+    "description": "A crafted link may trigger an unintended authenticated action or route sensitive data through an untrusted destination.",
+    "resource_type": [
+      "Mobile App",
+      "Mobile Application"
+    ],
+    "cloud_platform": [],
+    "stride_category": "Spoofing",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-939"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "deep_link_validation",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "deep_link_validation"
+    ],
+    "mitigation": "Validate supported link schemes, hosts and parameters, use platform-verified app links and require authorization for sensitive actions.",
+    "verification": "Open malformed and attacker-controlled test links; verify they cannot bypass login or change account state.",
+    "preconditions": [
+      "The scoped source explicitly states that deep link validation is absent in the described operation. Missing mention is not evidence of absence."
+    ],
+    "counterexamples": [
+      "Control present or applicability unestablished.",
+      "Only a topology label, a planned change, a conflicting statement or a claim about another environment."
+    ],
+    "mapping_rationale": "Spoofing describes the impact in this rule; CWE-939 describes the weakness, not a tested exploit.",
+    "references": [
+      "https://mas.owasp.org/MASTG/"
+    ],
+    "source": "Aegis context-specific control catalog",
+    "version": "1.0.0",
+    "review_status": "engineering_review_pending_independent_validation",
+    "last_reviewed": null,
+    "source_checked_at": "2026-10-03",
+    "source_version": "Living documentation; checked 2026-10-03",
+    "lifecycle": "active",
+    "tags": [
+      "mobile",
+      "deep_link_validation"
+    ],
+    "test_contract": {
+      "control": "deep_link_validation",
+      "component_type": "Mobile App",
+      "component_name": "Scoped workload",
+      "properties": {},
+      "cases": [
+        "positive",
+        "protected",
+        "unknown",
+        "conflicting",
+        "planned",
+        "partial",
+        "wrong_scope"
+      ]
+    }
+  },
+  {
+    "id": "CTX-IDENTITY-RECOVERY-REVOCATION",
+    "taxonomy_policy": "explicit_only",
+    "title": "Account recovery does not revoke existing sessions",
+    "description": "A previously stolen session can remain usable after the legitimate owner recovers an account.",
+    "resource_type": [
+      "API",
+      "Service",
+      "Authentication",
+      "Identity"
+    ],
+    "cloud_platform": [],
+    "stride_category": "Spoofing",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-613"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "recovery_session_revocation",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "recovery_session_revocation"
+    ],
+    "mitigation": "Invalidate sessions and refresh-token families after verified recovery; require reauthentication for sensitive actions.",
+    "verification": "Keep a test session open, recover the account elsewhere and verify the old access is rejected according to policy.",
+    "preconditions": [
+      "The scoped source explicitly states that recovery session revocation is absent in the described operation. Missing mention is not evidence of absence."
+    ],
+    "counterexamples": [
+      "Control present or applicability unestablished.",
+      "Only a topology label, a planned change, a conflicting statement or a claim about another environment."
+    ],
+    "mapping_rationale": "Spoofing describes the impact in this rule; CWE-613 describes the weakness, not a tested exploit.",
+    "references": [
+      "https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html"
+    ],
+    "source": "Aegis context-specific control catalog",
+    "version": "1.0.0",
+    "review_status": "engineering_review_pending_independent_validation",
+    "last_reviewed": null,
+    "source_checked_at": "2026-10-03",
+    "source_version": "Living documentation; checked 2026-10-03",
+    "lifecycle": "active",
+    "tags": [
+      "identity",
+      "recovery_session_revocation"
+    ],
+    "test_contract": {
+      "control": "recovery_session_revocation",
+      "component_type": "API",
+      "component_name": "Scoped workload",
+      "properties": {},
+      "cases": [
+        "positive",
+        "protected",
+        "unknown",
+        "conflicting",
+        "planned",
+        "partial",
+        "wrong_scope"
+      ]
+    }
+  },
+  {
+    "id": "CTX-AUDIT-TENANT",
+    "taxonomy_policy": "explicit_only",
+    "title": "Audit events do not preserve tenant attribution",
+    "description": "Cross-tenant activity cannot be reliably attributed when audit records omit the server-resolved tenant and actor context.",
+    "resource_type": [
+      "API",
+      "Service",
+      "Logging",
+      "Monitoring"
+    ],
+    "cloud_platform": [],
+    "stride_category": "Repudiation",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-778"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "tenant_audit_attribution",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "tenant_audit_attribution"
+    ],
+    "mitigation": "Record trusted actor, tenant, target, action and correlation identifiers without secrets; protect the audit sink.",
+    "verification": "Perform equivalent test actions for two tenants and verify each audit event retains distinct trusted attribution.",
+    "preconditions": [
+      "The scoped source explicitly states that tenant audit attribution is absent in the described operation. Missing mention is not evidence of absence."
+    ],
+    "counterexamples": [
+      "Control present or applicability unestablished.",
+      "Only a topology label, a planned change, a conflicting statement or a claim about another environment."
+    ],
+    "mapping_rationale": "Repudiation describes the impact in this rule; CWE-778 describes the weakness, not a tested exploit.",
+    "references": [
+      "https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html"
+    ],
+    "source": "Aegis context-specific control catalog",
+    "version": "1.0.0",
+    "review_status": "engineering_review_pending_independent_validation",
+    "last_reviewed": null,
+    "source_checked_at": "2026-10-03",
+    "source_version": "Living documentation; checked 2026-10-03",
+    "lifecycle": "active",
+    "tags": [
+      "audit",
+      "tenant_audit_attribution"
+    ],
+    "test_contract": {
+      "control": "tenant_audit_attribution",
+      "component_type": "API",
+      "component_name": "Scoped workload",
+      "properties": {},
+      "cases": [
+        "positive",
+        "protected",
+        "unknown",
+        "conflicting",
+        "planned",
+        "partial",
+        "wrong_scope"
+      ]
+    }
+  },
+  {
+    "id": "CTX-API-ASYNC-BUDGET",
+    "taxonomy_policy": "explicit_only",
+    "title": "Asynchronous jobs have no per-tenant execution budget",
+    "description": "A tenant can exhaust shared worker capacity when accepted jobs have no bounded execution budget.",
+    "resource_type": [
+      "API",
+      "Service",
+      "Worker",
+      "Queue"
+    ],
+    "cloud_platform": [],
+    "stride_category": "Denial of Service",
+    "severity": "High",
+    "likelihood": "Medium",
+    "cwe": [
+      "CWE-770"
+    ],
+    "detection": {
+      "auto_detectable": true,
+      "evidence_requirement": "explicit",
+      "logic": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "async_job_budget",
+            "op": "==",
+            "value": false
+          }
+        ]
+      }
+    },
+    "negating_controls": [
+      "async_job_budget"
+    ],
+    "mitigation": "Set per-tenant queue, concurrency and runtime limits; enforce cancellation and isolate retry budgets.",
+    "verification": "Submit bounded load for one test tenant and verify other tenants retain service and runaway work is stopped.",
+    "preconditions": [
+      "The scoped source explicitly states that async job budget is absent in the described operation. Missing mention is not evidence of absence."
+    ],
+    "counterexamples": [
+      "Control present or applicability unestablished.",
+      "Only a topology label, a planned change, a conflicting statement or a claim about another environment."
+    ],
+    "mapping_rationale": "Denial of Service describes the impact in this rule; CWE-770 describes the weakness, not a tested exploit.",
+    "references": [
+      "https://api-security.owasp.org/editions/2023/en/0x11-t10/"
+    ],
+    "source": "Aegis context-specific control catalog",
+    "version": "1.0.0",
+    "review_status": "engineering_review_pending_independent_validation",
+    "last_reviewed": null,
+    "source_checked_at": "2026-10-03",
+    "source_version": "OWASP API 2023",
+    "lifecycle": "active",
+    "tags": [
+      "api",
+      "async_job_budget"
+    ],
+    "test_contract": {
+      "control": "async_job_budget",
+      "component_type": "API",
+      "component_name": "Scoped workload",
+      "properties": {},
+      "cases": [
+        "positive",
+        "protected",
+        "unknown",
+        "conflicting",
+        "planned",
+        "partial",
+        "wrong_scope"
+      ]
+    }
+  }
+]

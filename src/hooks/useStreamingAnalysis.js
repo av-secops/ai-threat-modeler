@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef } from 'react';
 import { WS_BASE_URL } from '../config';
 import { mapAnalysisResult } from '../utils/analysisMapper';
+import { workspaceToken } from '../services/workspaceAuth';
 
 const WS_URL = `${WS_BASE_URL}/ws/analyze`;
 const getAnalysisMode = (useLocalSlm = true) => (useLocalSlm ? 'standard' : 'fast');
@@ -57,6 +58,7 @@ export function useStreamingAnalysis() {
                 setPhase('Connected');
                 setMessage('Sending architecture for analysis...');
                 ws.send(JSON.stringify({
+                    access_token: workspaceToken() || undefined,
                     description,
                     project_name: projectName,
                     use_local_slm: useLocalSlm,
@@ -103,9 +105,11 @@ export function useStreamingAnalysis() {
 
             ws.onclose = (event) => {
                 wsRef.current = null;
-                if (event.code !== 1000 && !completedRef.current) {
-                    // Abnormal close without result
+                if (!completedRef.current) {
                     setIsAnalyzing(false);
+                    const message = event.code === 1008 ? 'Workspace access was denied. Check your access settings.' : 'Analysis connection closed before a result was received.';
+                    setError(message);
+                    reject(new Error(message));
                 }
             };
         });

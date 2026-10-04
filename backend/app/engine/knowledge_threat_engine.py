@@ -12,7 +12,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from types import SimpleNamespace
 
 from ..models import Threat
-from .control_contracts import normalized_properties, control_value, boundary_dimensions
+from .control_contracts import normalized_properties, control_value, boundary_dimensions, presence
 
 
 AI_RULE_MODULES = {
@@ -21,7 +21,7 @@ AI_RULE_MODULES = {
 }
 
 
-Predicate = Callable[[Dict[str, Any], set[str]], Tuple[bool, List[str]]]
+Predicate = Callable[[Dict[str, Any], set[str]], Tuple[Optional[bool], List[str]]]
 
 
 @dataclass(frozen=True)
@@ -62,6 +62,16 @@ class KnowledgeThreatEngine:
         evaluated = 0
         applicable = 0
         cache_hits = 0
+        decisions = []
+        outcomes = Counter()
+
+        def record(rule, element, outcome, fields=()):
+            outcomes[outcome] += 1
+            if len(decisions) < 2000:
+                decisions.append({"rule_id": rule["id"], "rule_version": rule.get("version"),
+                    "element_id": element.id, "outcome": outcome, "fields": list(fields),
+                    "finding_ids": [f"KB-{rule['id']}-{element.id}"] if outcome == "matched" else []})
+
         allowed = set(allowed_modules or [])
         active_rules = [item for item in self._rules if not allowed or item.data["source_module"] in allowed]
         skipped_by_route = len(architecture.components or []) * sum(
@@ -80,6 +90,8 @@ class KnowledgeThreatEngine:
                     "trust_boundary_crossing": bool(boundary_dimensions(components[flow.source_id], components[flow.target_id]))},
             ))
         for component in elements:
+            if component.properties.get('diagram_review_required'):
+                continue
             props = _component_properties(component)
             key = hashlib.sha256(json.dumps([props, component.evidence], sort_keys=True, default=str).encode()).hexdigest()
             explicit_negations = set(props.get("explicit_negations") or [])
@@ -89,10 +101,13 @@ class KnowledgeThreatEngine:
                     continue
                 evaluated += 1
                 if rule.get("source_module") in AI_RULE_MODULES and not _ai_rule_scope(component):
+                    record(rule, component, "not_applicable")
                     continue
                 if not compiled.matches(component):
+                    record(rule, component, "not_applicable")
                     continue
                 if _has_negating_control(props, compiled.negating_controls, explicit_negations):
+                    record(rule, component, "protected", compiled.negating_controls)
                     continue
                 applicable += 1
                 with self._predicate_lock:
@@ -107,10 +122,13 @@ class KnowledgeThreatEngine:
                 else:
                     matched, evidence_fields = cached
                     cache_hits += 1
-                if not matched:
+                if matched is not True:
+                    record(rule, component, "needs_evidence" if matched is None else "not_matched", evidence_fields)
                     continue
                 if any(control_value(props, field) == "conflicting" for field in evidence_fields):
+                    record(rule, component, "conflicting", evidence_fields)
                     continue
+                record(rule, component, "matched", evidence_fields)
                 evidence = _component_evidence(component, evidence_fields)
                 confidence = "High" if _has_direct_evidence(component, evidence_fields) else "Medium"
                 findings.append(_to_threat(rule, component, evidence, confidence, evidence_fields))
@@ -129,6 +147,9 @@ class KnowledgeThreatEngine:
             "findings": len(findings),
             "skipped_by_specialist_route": skipped_by_route,
             "active_modules": sorted(allowed),
+            "candidate_decisions": decisions,
+            "decision_counts": dict(outcomes),
+            "decision_trace_truncated": sum(outcomes.values()) > len(decisions),
         }
         return findings, diagnostics
 
@@ -239,14 +260,7 @@ _UNKNOWN_STRINGS = {"", "unknown", "unspecified", "null", "n/a"}
 
 
 def _presence_state(value: Any) -> Optional[bool]:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in _UNKNOWN_STRINGS:
-            return None
-        return normalized not in _ABSENT_STRINGS
-    return None
+    return presence(value)
 
 
 def _control_names(rule: Dict[str, Any]) -> Tuple[str, ...]:
@@ -264,6 +278,9 @@ def _negated_by_control(props: Dict[str, Any], rule: Dict[str, Any]) -> bool:
 def _has_negating_control(props: Dict[str, Any], controls: Tuple[str, ...], explicit_negations: set[str]) -> bool:
     assertions = props.get("control_assertions") or {}
     for control in controls:
+        correlated = (props.get("correlated_controls") or {}).get(control, {}).get("state")
+        if correlated in {"partial", "planned", "conflicting", "unknown"} or control_value(props, control) == "conflicting":
+            continue
         state = _presence_state(props.get(control))
         if control in explicit_negations or state is False:
             continue
@@ -274,7 +291,10 @@ def _has_negating_control(props: Dict[str, Any], controls: Tuple[str, ...], expl
 
 def _evaluate_logic(logic: Dict[str, Any], props: Dict[str, Any]) -> Tuple[bool, List[str]]:
     predicate = _compile_logic(logic)
-    return predicate(props, set(props.get("explicit_negations") or [])) if predicate else (False, [])
+    if predicate is None:
+        return False, []
+    matched, fields = predicate(props, set(props.get("explicit_negations") or []))
+    return (True, fields) if matched is True else (False, [])
 
 
 def supports_detection_logic(logic: Any) -> bool:
@@ -303,17 +323,15 @@ def _compile_logic(logic: Dict[str, Any]) -> Optional[Predicate]:
             return None
         predicates.append(predicate)
 
-    def evaluate(props: Dict[str, Any], explicit_negations: set[str]) -> Tuple[bool, List[str]]:
-        fields = []
-        any_matched = False
-        for predicate in predicates:
-            matched, matched_fields = predicate(props, explicit_negations)
-            if not matched and operator == "AND":
-                return False, []
-            if matched:
-                any_matched = True
-                fields.extend(matched_fields)
-        return any_matched, list(dict.fromkeys(fields))
+    def evaluate(props: Dict[str, Any], explicit_negations: set[str]) -> Tuple[Optional[bool], List[str]]:
+        results = [predicate(props, explicit_negations) for predicate in predicates]
+        states = [state for state, _ in results]
+        if operator == "AND":
+            state = False if False in states else None if None in states else True
+        else:
+            state = True if True in states else None if None in states else False
+        fields = [field for result, names in results if result is state for field in names]
+        return state, list(dict.fromkeys(fields))
 
     return evaluate
 
@@ -333,10 +351,19 @@ def _compile_condition(condition: Dict[str, Any]) -> Optional[Predicate]:
         return None
     path = tuple(field.split("."))
 
-    def evaluate(props: Dict[str, Any], explicit_negations: set[str]) -> Tuple[bool, List[str]]:
+    def evaluate(props: Dict[str, Any], explicit_negations: set[str]) -> Tuple[Optional[bool], List[str]]:
         actual = _path_value(props, path)
+        state = control_value(props, field)
+        if state == "conflicting" or (props.get("correlated_controls") or {}).get(field, {}).get("state") in {"partial", "planned", "unknown"}:
+            return None, [field]
+        unknown = actual is None or (isinstance(actual, str) and (
+            actual.strip().lower() in _UNKNOWN_STRINGS or actual.strip().startswith(("${", "{{"))))
+        if isinstance(expected, bool) and not isinstance(actual, bool):
+            unknown = True
+        if unknown and not (op in {"missing", "not_set"} and field in explicit_negations):
+            return None, [field]
         matched = _compare(actual, expected, op, explicitly_absent=field in explicit_negations)
-        return matched, [field] if matched else []
+        return matched, [field]
 
     return evaluate
 
@@ -399,7 +426,12 @@ def _has_direct_evidence(component, fields: List[str]) -> bool:
 
 
 def _component_evidence(component, fields: List[str]) -> List[Dict[str, Any]]:
-    evidence = list(component.evidence or [])
+    evidence = [e for e in component.evidence or [] if e.get('evidence_scope') != 'topology'
+        and (not e.get('control') or e['control'] in fields)]
+    for field in fields:
+        for record in component.properties.get('control_evidence', {}).get(field, []):
+            if record not in evidence:
+                evidence.append(record)
     props = _component_properties(component)
     explicit_negations = set(props.get("explicit_negations") or [])
     assertions = ", ".join(
@@ -455,12 +487,18 @@ def _to_threat(rule: Dict[str, Any], component, evidence: List[Dict[str, Any]], 
         privilege_required="None" if component.trust_level in {"public", "external"} else "Low",
         # Which control decided the finding, so a second route to the same
         # problem can recognise it instead of reporting it again.
-        explanation={"matched_controls": sorted(set(matched_controls or ())),
+        explanation={"matched_controls": sorted(set(matched_controls or ()) - {"type", "cloud_provider", "iac_resource_type", "db_type"}),
+            "matched_control_values": {field: _nested_value(component.properties or {}, field) for field in matched_controls or ()},
+            "evaluated_fields": sorted(set(matched_controls or ())),
             "framework_mappings": rule.get("framework_mappings") or [],
             "framework_mapping_issues": rule.get("framework_mapping_issues") or [],
             "verification": rule.get("verification") or "Validate the cited control on the affected element and repeat the negative authorization or abuse test after remediation.",
-            "rule_provenance": {key: rule.get(key) for key in ("id", "version", "source", "source_module", "references", "taxonomy_mapping_quality", "review_status", "last_reviewed")}},
+            "rule_provenance": {key: rule.get(key) for key in ("id", "version", "source", "source_module", "references", "taxonomy_mapping_quality", "review_status", "last_reviewed", "source_version", "source_checked_at", "mapping_rationale")}},
     )
+    scoped_statements = [item['statement'] for item in evidence if item.get('statement')
+        and item.get('control') in (matched_controls or []) and item.get('source_type') in {'architecture_input', 'iac', 'code'}]
+    if scoped_statements:
+        threat.root_cause = f"Submitted evidence for {component.name}: {scoped_statements[0][:600]}"
     if component.type == "Data Flow":
         threat.component = threat.affected_component = threat.component_id = None
         threat.affected_components = []

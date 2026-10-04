@@ -33,6 +33,17 @@ class IaCSecurityAnalyzer:
         format_name = (format_hint or "auto").lower()
         findings: List[Dict[str, Any]] = []
 
+        if format_name == 'dockerfile':
+            from .dockerfile_model import read_stages, literal_root_user
+            final = read_stages(content)[-1]
+            if literal_root_user(final) is True:
+                findings.append(self._finding('IAC-DOCKERFILE-ROOT-USER', final['id'], final['user_line'],
+                    'Medium', 'Final image explicitly selects the root user',
+                    'The final build stage explicitly selects UID 0 or root. This increases the impact of an application compromise unless deployment policy overrides the user. It does not establish public exposure or a container escape.',
+                    'Select a nonzero numeric USER in the final stage and enforce non-root execution in the workload deployment. Verify filesystem permissions and the effective runtime identity.',
+                    'Elevation of Privilege', 'CWE-250'))
+            return findings
+
         if format_name == "terraform" or self._terraform_resource.search(content):
             findings.extend(self._analyze_terraform(content))
 

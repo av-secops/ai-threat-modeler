@@ -49,9 +49,12 @@ identities: each identity has a unique `name` and a `role` of `viewer`, `editor`
 or `admin`. Enter an existing token using **Workspace access** in the UI.
 Tokens are kept in session storage and must not be committed to Git.
 
-Viewers can read and compare. Editors can create products, releases and models.
-Admins can also rename/archive products and read `/enterprise/audit`. These are
-installation-wide roles, not per-product tenant isolation or enterprise SSO.
+Viewers can read and compare authorized products. Editors can create releases and
+models in their product scope; new products require a wildcard editor grant.
+Product admins can rename/archive their products. Installation audit and shared
+questionnaire administration require a wildcard admin grant. Legacy tokens without
+`products` remain installation-wide. Verified OIDC access tokens are supported,
+but a browser login redirect is not included. See [access configuration](workspace-access.md).
 
 ## Jobs and review
 

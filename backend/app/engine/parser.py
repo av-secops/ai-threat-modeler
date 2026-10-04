@@ -136,13 +136,15 @@ class ArchitectureParser:
         for source in self._analysis_sources(text):
             if source.get('role') == 'reference_report':
                 continue
-            if source.get('type') not in {'yaml', 'yml', 'json', 'tf', 'hcl'}:
+            if source.get('type') not in {'yaml', 'yml', 'json', 'tf', 'hcl', 'dockerfile'}:
                 continue
             content = self._without_structured_paths(str(source.get('body') or ''))
             try:
                 hint = 'terraform' if source.get('type') in {'tf', 'hcl'} else 'auto'
-                architecture = IaCParser().parse(content, hint)
-            except ValueError:
+                architecture = IaCParser().parse(content, hint, str(source.get('document') or ''))
+            except ValueError as exc:
+                if IaCParser.detect_format(content, str(source.get('document') or ''), hint) != 'auto':
+                    parsed.append({**source, 'content': content, 'error': str(exc)})
                 continue
             parsed.append({**source, 'content': content, 'architecture': architecture})
         return parsed
@@ -198,7 +200,7 @@ class ArchitectureParser:
                     continue
                 incoming.assumed = bool(incoming.assumed or (incoming.properties or {}).get('assumed'))
                 incoming.properties = {
-                    **(incoming.properties or {}), 'authoritative': True,
+                    **(incoming.properties or {}), 'authoritative': not incoming.assumed,
                     'source_document': document, 'extraction_method': 'iac_parser',
                 }
                 flows.append(incoming)
@@ -1581,7 +1583,18 @@ class ArchitectureParser:
                     continue
             text = str(issue.get("description") or "").lower()
             direct = []
+            named_subjects = []
+
+            def mentioned(alias: str) -> bool:
+                # S3 is a canonical technology name, not a two-letter prose word.
+                return (len(alias) >= 3 or alias == 's3') and bool(re.search(
+                    r"(?<![a-z0-9])" + re.escape(alias) + r"(?![a-z0-9])", text
+                ))
+
             for component_id, component in components.items():
+                names = {component_id.lower().replace("_", " "), component.name.lower()}
+                if any(mentioned(name) for name in names):
+                    named_subjects.append(component_id)
                 aliases = {
                     component_id.lower().replace("_", " "),
                     component.name.lower(),
@@ -1589,20 +1602,20 @@ class ArchitectureParser:
                     str((component.properties or {}).get("technology") or "").lower(),
                     str((component.properties or {}).get("cloud_service") or "").lower(),
                 }
-                if any(
-                    len(alias) >= 3 and re.search(r"(?<![a-z0-9])" + re.escape(alias) + r"(?![a-z0-9])", text)
-                    for alias in aliases if alias
-                ):
+                if any(mentioned(alias) for alias in aliases if alias):
                     direct.append(component_id)
-            preferred = self._preferred_issue_component_ids(issue, text, components)
-            if preferred:
-                ordered = [*preferred, *(item for item in direct if item not in preferred)]
-                issue["component_hints"] = ordered[:8]
-                issue["component_resolution"] = "literal_and_rule_scope" if direct else "rule_scope_match"
+            if named_subjects:
+                issue["component_hints"] = named_subjects[:8]
+                issue["component_resolution"] = "named_subject"
                 continue
             if direct:
                 issue["component_hints"] = direct[:8]
                 issue["component_resolution"] = "literal_issue_evidence"
+                continue
+            preferred = self._preferred_issue_component_ids(issue, text, components)
+            if preferred:
+                issue["component_hints"] = preferred[:8]
+                issue["component_resolution"] = "rule_scope_match"
                 continue
 
             # Ordered so that the closest-fitting component type is offered first.
@@ -2760,10 +2773,12 @@ class ArchitectureParser:
             return authoritative
 
         embedded_iac = self._embedded_iac_architectures(text)
+        failed_iac = [item for item in embedded_iac if item.get('error')]
         model_text = self._architecture_only_text(
             text,
             excluded_documents={str(item.get('document') or '') for item in embedded_iac},
         )
+        embedded_iac = [item for item in embedded_iac if not item.get('error')]
         text_lower = model_text.lower()
         components: Dict[str, Component] = {}
         flows: List[DataFlow] = []
@@ -3088,6 +3103,10 @@ class ArchitectureParser:
                 'iac_findings': iac_findings,
                 'unscoped_stated_weaknesses': unscoped_stated_weaknesses,
                 'embedded_iac_documents': [item.get('document') for item in embedded_iac],
+                'iac_parse_failures': [{'document': item.get('document'), 'reason': item['error']} for item in failed_iac],
+                'iac_coverage': {'format': 'embedded-iac', 'status': 'partial',
+                    'artifacts': [item['architecture'].metadata.get('iac_coverage', {}) for item in embedded_iac],
+                    'runtime_verified': False, 'executes_uploaded_code': False} if embedded_iac else {},
                 'unresolved_references': [
                     {**reference, 'source_document': source.get('document')}
                     for source in embedded_iac

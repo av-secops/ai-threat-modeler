@@ -1,0 +1,37 @@
+{
+  "schema_version": "aegis-interchange-schemas/1",
+  "normalization": "Upstream JSON values are unchanged. Only JSON whitespace and escaping were normalized to UTF-8 with LF line endings.",
+  "network_policy": "No schema downloads. Only local fragment references are allowed; $id and $schema URLs are identifiers, not retrieval instructions.",
+  "schemas": {
+    "otm": {
+      "file": "otm-0.2.0.schema.json",
+      "format_version": "0.2.0",
+      "upstream_repository": "https://github.com/iriusrisk/OpenThreatModel",
+      "upstream_commit": "c88c5a7b4115f0f025e28d5682a2b0d790b389e4",
+      "upstream_path": "otm_schema.json",
+      "source_url": "https://raw.githubusercontent.com/iriusrisk/OpenThreatModel/c88c5a7b4115f0f025e28d5682a2b0d790b389e4/otm_schema.json",
+      "sha256": "550748641769a89ed17a06b0d88cb4181a4fde76cba16ae7f8027347c979b441",
+      "license": "Apache-2.0",
+      "license_url": "https://www.apache.org/licenses/LICENSE-2.0",
+      "license_file": "LICENSE-Apache-2.0.txt",
+      "license_basis": "The schema's own $comment explicitly states Apache License 2.0; the repository root LICENSE uses CC-BY-SA-4.0 for repository materials.",
+      "repository_license_url": "https://github.com/iriusrisk/OpenThreatModel/blob/c88c5a7b4115f0f025e28d5682a2b0d790b389e4/LICENSE",
+      "attribution": "IriusRisk and OpenThreatModel contributors. The upstream schema includes its Apache License 2.0 publication notice."
+    },
+    "threat-dragon": {
+      "file": "threat-dragon-v2.schema.json",
+      "format_version": "2.x",
+      "upstream_repository": "https://github.com/OWASP/threat-dragon",
+      "upstream_commit": "1753ad0fae42d65c56e754fa8faf8fb57179f9f5",
+      "upstream_path": "td.vue/src/assets/schema/threat-dragon-v2.schema.json",
+      "source_url": "https://raw.githubusercontent.com/OWASP/threat-dragon/1753ad0fae42d65c56e754fa8faf8fb57179f9f5/td.vue/src/assets/schema/threat-dragon-v2.schema.json",
+      "sha256": "245a42a5d1d5e292f9a47fd950139a46e479878abaa1ff7ebbf9fd94725fbe85",
+      "license": "Apache-2.0",
+      "license_url": "https://www.apache.org/licenses/LICENSE-2.0",
+      "license_file": "LICENSE-Apache-2.0.txt",
+      "upstream_license_url": "https://github.com/OWASP/threat-dragon/blob/1753ad0fae42d65c56e754fa8faf8fb57179f9f5/license.txt",
+      "attribution": "OWASP Threat Dragon contributors. Distributed under the upstream project's Apache License 2.0.",
+      "validation_dialect": "Draft 7 plus the upstream nullable annotation; schema JSON remains unchanged."
+    }
+  }
+}

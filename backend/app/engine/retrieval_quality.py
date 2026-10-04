@@ -5,11 +5,13 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
+import sqlite3
 import threading
 import time
 import uuid
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -199,6 +201,10 @@ def rule_provenance(rule: Dict[str, Any]) -> Dict[str, Any]:
         "references": rule.get("references") or [],
         "taxonomy_mapping_quality": rule.get("taxonomy_mapping_quality") or {},
         "framework_mappings": rule.get("framework_mappings") or [],
+        "source_version": rule.get("source_version"),
+        "source_checked_at": rule.get("source_checked_at"),
+        "review_status": rule.get("review_status"),
+        "mapping_rationale": rule.get("mapping_rationale"),
         "knowledge_schema": "canonical-kb-3.0",
     }
 
@@ -207,6 +213,7 @@ def audit_knowledge_rules(rules: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Surface near duplicates and logically conflicting applicability signals."""
     duplicates, contradictions = [], []
     tokenized = [_tokens(f"{item.get('title', '')} {item.get('description', '')}") for item in rules]
+    titles = [_tokens(str(item.get('title') or '')) for item in rules]
     for left_index, left in enumerate(rules):
         left_components = set(map(str.lower, left.get("components") or []))
         for right_index in range(left_index + 1, len(rules)):
@@ -217,10 +224,7 @@ def audit_knowledge_rules(rules: List[Dict[str, Any]]) -> Dict[str, Any]:
             if left_components and right_components and not left_components & right_components and "any" not in left_components | right_components:
                 continue
             similarity = _jaccard(tokenized[left_index], tokenized[right_index])
-            title_similarity = _jaccard(
-                _tokens(str(left.get("title") or "")),
-                _tokens(str(right.get("title") or "")),
-            )
+            title_similarity = _jaccard(titles[left_index], titles[right_index])
             shared_cwe = set(left.get("cwe") or []) & set(right.get("cwe") or [])
             if (
                 similarity >= 0.82 or (shared_cwe and similarity >= 0.45)
@@ -253,14 +257,17 @@ class RetrievalFeedbackStore:
         if decision not in {"accepted", "false_positive", "mitigated", "reclassified"}:
             raise ValueError("decision must be accepted, false_positive, mitigated, or reclassified")
         event = {
+            **payload,
             "schema_version": "retrieval-feedback-1.0", "event": "decision",
             "feedback_id": str(uuid.uuid4()), "recorded_at": _now(),
-            "approved_for_training": False, **payload, "decision": decision,
+            "approved_for_training": False, "decision": decision,
         }
         self._append(event)
         return event
 
     def approve(self, feedback_id: str, approved_by: str) -> Dict[str, Any]:
+        if not str(approved_by or '').strip():
+            raise ValueError('A named reviewer is required for training approval.')
         decisions = {item.get("feedback_id"): item for item in self.events() if item.get("event") == "decision"}
         decision = decisions.get(feedback_id)
         if not decision:
@@ -290,7 +297,7 @@ class RetrievalFeedbackStore:
         reviewed = decisions.get("accepted", 0) + decisions.get("false_positive", 0) + decisions.get("reclassified", 0)
         return {
             "decisions": dict(decisions), "reviewed_for_accuracy": reviewed,
-            "observed_false_positive_rate": round(decisions.get("false_positive", 0) / max(1, reviewed), 4),
+            "observed_false_positive_rate": round(decisions.get("false_positive", 0) / reviewed, 4) if reviewed else None,
             "approved_training_records": len(self.approved_training_records()),
         }
 
@@ -363,20 +370,76 @@ class RetrievalCalibrator:
 
 
 class RetrievalMonitor:
-    def __init__(self):
+    def __init__(self, path=None):
         self._lock = threading.Lock()
+        self._persistence_lock = threading.Lock()
         self._counters = Counter()
-        self._latency_ms: List[float] = []
+        self._latency_ms = deque(maxlen=5000)
+        configured = path or os.getenv('AEGIS_RETRIEVAL_METRICS_DB')
+        self._path = Path(configured) if configured else None
+        self._run_id = uuid.uuid4().hex
+        self._started = time.time()
+        self._last_flush = time.monotonic()
+        self._persistence_error = False
 
     def record(self, *, latency_ms: float, results: int, fallback: bool, cache: str) -> None:
+        if not math.isfinite(latency_ms) or latency_ms < 0 or results < 0:
+            return
+        if re.fullmatch(r'incremental:\d+_changed', str(cache)):
+            cache = 'incremental'
+        cache = cache if cache in {'hit', 'miss', 'memory', 'disk', 'none', 'disabled', 'partial',
+            'loaded', 'created', 'not_built', 'lexical_only', 'incremental'} else 'other'
         with self._lock:
             self._counters["queries"] += 1
             self._counters["results"] += results
             self._counters["fallback_queries"] += int(fallback)
             self._counters[f"cache:{cache}"] += 1
             self._latency_ms.append(float(latency_ms))
-            if len(self._latency_ms) > 5000:
-                self._latency_ms = self._latency_ms[-5000:]
+            flush_due = self._path and time.monotonic() - self._last_flush >= 60
+        if flush_due:
+            self.flush()
+
+    def flush(self):
+        """Best-effort run checkpoints: no queries, documents or finding content."""
+        if not self._path:
+            return
+        with self._persistence_lock:
+            with self._lock:
+                payload = json.dumps({'counters': dict(self._counters), 'latencies': list(self._latency_ms)})
+            try:
+                self._path.parent.mkdir(parents=True, exist_ok=True)
+                with sqlite3.connect(self._path, timeout=.2) as db:
+                    db.execute('CREATE TABLE IF NOT EXISTS retrieval_runs(id TEXT PRIMARY KEY, started REAL, updated REAL, payload TEXT)')
+                    db.execute('INSERT INTO retrieval_runs VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET updated=excluded.updated,payload=excluded.payload',
+                               (self._run_id, self._started, time.time(), payload))
+                    db.execute('DELETE FROM retrieval_runs WHERE id NOT IN (SELECT id FROM retrieval_runs ORDER BY updated DESC,id LIMIT 50)')
+                self._persistence_error = False
+            except (OSError, sqlite3.Error):
+                self._persistence_error = True
+            finally:
+                self._last_flush = time.monotonic()
+
+    def _history(self):
+        if not self._path:
+            return {'enabled': False, 'status': 'process_only'}
+        self.flush()
+        if self._persistence_error:
+            return {'enabled': True, 'status': 'unavailable'}
+        try:
+            with sqlite3.connect(self._path, timeout=.2) as db:
+                rows = db.execute('SELECT payload FROM retrieval_runs ORDER BY updated DESC,id LIMIT 50').fetchall()
+            counters, latencies = Counter(), []
+            for row in rows:
+                value = json.loads(row[0])
+                counters.update(value['counters'])
+                latencies.extend(value['latencies'])
+            latencies.sort()
+            return {'enabled': True, 'status': 'available', 'retained_runs': len(rows),
+                'counters': dict(counters), 'latency_samples': len(latencies),
+                'sample_scope': 'Last 5000 retrievals per retained run; up to 50 runs. Not a production accuracy measurement.',
+                'sample_p95_ms': round(_percentile(latencies, .95), 2)}
+        except (OSError, sqlite3.Error, ValueError, KeyError, TypeError):
+            return {'enabled': True, 'status': 'unavailable'}
 
     def snapshot(self) -> Dict[str, Any]:
         with self._lock:
@@ -384,6 +447,8 @@ class RetrievalMonitor:
             counters = dict(self._counters)
         return {
             "version": "retrieval-monitor-1.0", **counters,
+            'run_id': self._run_id, 'persistence': self._history(),
+            'latency_samples': len(latencies), 'latency_scope': 'Last 5000 retrievals in this process',
             "fallback_rate": round(counters.get("fallback_queries", 0) / max(1, counters.get("queries", 0)), 4),
             "latency_ms": {
                 "p50": round(_percentile(latencies, 0.5), 2),

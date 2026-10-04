@@ -1,0 +1,10 @@
+<mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/>
+<mxCell id="customer" value="Customer" vertex="1" parent="1"><mxGeometry x="20" y="50" width="100" height="60"/></mxCell>
+<mxCell id="zone" value="Application trust boundary" vertex="1" parent="1" style="swimlane;"><mxGeometry x="200" y="20" width="300" height="300"/></mxCell>
+<mxCell id="api" value="Payment API" vertex="1" parent="zone"><mxGeometry x="40" y="40" width="120" height="60"/></mxCell>
+<mxCell id="db" value="PostgreSQL" vertex="1" parent="zone" style="shape=cylinder;"><mxGeometry x="40" y="180" width="120" height="60"/></mxCell>
+<mxCell id="stripe" value="Stripe" vertex="1" parent="1"><mxGeometry x="600" y="50" width="100" height="60"/></mxCell>
+<mxCell id="login" edge="1" source="customer" target="api" value="HTTPS checkout"/>
+<mxCell id="query" edge="1" source="api" target="db" value="TLS payment state"/>
+<mxCell id="payment" edge="1" source="api" target="stripe" value="HTTPS payment" style="startArrow=classic;endArrow=classic;"/>
+</root></mxGraphModel>

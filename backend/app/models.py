@@ -14,6 +14,9 @@ class Component(BaseModel):
 
 
 class DataFlow(BaseModel):
+    id: str = ""
+    flow_number: str = ""
+    description: str = ""
     source_id: str
     target_id: str
     protocol: str
@@ -25,6 +28,8 @@ class DataFlow(BaseModel):
 
 
 class TrustBoundary(BaseModel):
+    id: str = ""
+    parent_id: Optional[str] = None
     name: str
     boundary_type: str
     components: List[str] = Field(default_factory=list)
@@ -67,6 +72,9 @@ class Threat(BaseModel):
     confidence_score: Optional[float] = None
     tier: Optional[str] = "Potential"
     status: Optional[str] = "Identified"
+    review_status: str = "pending_review"
+    affected_flow_refs: List[Dict[str, Any]] = Field(default_factory=list)
+    flow_reference_status: str = "not_flow_specific"
     evidence: List[str] = Field(default_factory=list)
     evidence_details: List[Dict[str, Any]] = Field(default_factory=list)
     finding_type: str = "architecture"
@@ -122,7 +130,7 @@ class AnalysisResult(BaseModel):
     summary: str
     threats: List[Threat]
     architecture: SystemArchitecture
-    score: int
+    score: Optional[int]
     mermaid_diagram: Optional[str] = None
     diagram: Optional[str] = None
     report_markdown: Optional[str] = None

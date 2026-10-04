@@ -41,6 +41,11 @@ export const severityTheme = {
 };
 
 export const reviewStateMeta = {
+    pending_review: { label: 'Pending Review', className: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200' },
+    in_review: { label: 'In Review', className: 'bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-200' },
+    action_required: { label: 'Action Required', className: 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-200' },
+    mitigation_proposed: { label: 'Mitigation Proposed', className: 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200' },
+    verified_fixed: { label: 'Verified Fixed', className: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200' },
     open: {
         label: 'Open',
         className: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300',

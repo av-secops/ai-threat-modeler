@@ -47,6 +47,7 @@ class ReportGenerator:
             f"- Assets classified: {len(result.architecture.assets)}",
             f"- Confirmed findings: {confirmed}",
             f"- Risk model: {(result.risk_methodology or {}).get('version', 'technical-v1')}",
+            *(['- Architecture extraction incomplete. Security score unavailable; this is not a final assessment.'] if result.score is None else []),
             *ReportGenerator._unread_sources(result),
             "",
         ]
@@ -299,6 +300,10 @@ class ReportGenerator:
             lines.append(f"- Implementation detail: {threat.implementation_detail or threat.mitigation}")
             if threat.optional_config_example:
                 lines.append(f"- Example: {threat.optional_config_example}")
+            for criterion in (threat.explanation or {}).get('remediation_validation', {}).get('criteria', []):
+                lines.append(f"- Verification procedure (not performed): {criterion['procedure']}")
+                lines.append(f"- Acceptance condition: {criterion['acceptance_condition']}")
+                lines.append(f"- Required evidence: {'; '.join(criterion.get('required_evidence') or [])}")
         lines.append("")
         return lines
 

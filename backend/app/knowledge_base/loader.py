@@ -11,8 +11,14 @@ import re
 from pathlib import Path
 from typing import Any, List, Dict, Optional
 import logging
+import os
+import hashlib
+from copy import deepcopy
+from pydantic import ValidationError
 
 from .contracts import CanonicalThreatRule
+from .governance import BUNDLED_MODULES, quarantine_reason, audit_contracts
+from .curation import apply_legacy_curation
 from .frameworks import registry, resolve_mappings, rule_mappings
 from ..engine.control_statements import CONTROL_TERMS
 from ..engine.control_contracts import CONTROL_ALIASES
@@ -62,8 +68,8 @@ EXCLUDED_KB_FILES = {
 class ThreatKnowledgeBase:
     """Loads and manages comprehensive threat knowledge base"""
     
-    def __init__(self):
-        self.kb_dir = Path(__file__).parent
+    def __init__(self, kb_dir=None):
+        self.kb_dir = Path(kb_dir) if kb_dir is not None else Path(__file__).parent
         self.threats: List[Dict] = []
         self.threats_by_id: Dict[str, Dict] = {}
         self.threats_by_component: Dict[str, List[Dict]] = {}
@@ -71,7 +77,39 @@ class ThreatKnowledgeBase:
         self.validation_issues: List[Dict[str, str]] = []
         self.loaded_modules: List[str] = []
         self.typed_rules: List[CanonicalThreatRule] = []
+        self.quarantined_rules = []
         self.load_all()
+
+    @classmethod
+    def from_canonical_rules(cls, rules):
+        """Load a validated release snapshot without silently renormalizing mappings.
+
+        This does not approve a pack. Runtime callers obtain rules from a verified,
+        published KnowledgeReleaseStore snapshot rather than from request JSON.
+        """
+        instance = cls.__new__(cls)
+        instance.kb_dir = Path(__file__).parent
+        instance.threats = deepcopy(rules)
+        if not isinstance(instance.threats, list):
+            raise ValueError('Release rules must be a list.')
+        for rule in instance.threats:
+            if not isinstance(rule, dict):
+                raise ValueError('Release rules must be objects.')
+            errors = cls._canonical_validation_errors(rule)
+            if errors:
+                raise ValueError('Invalid release rule: ' + '; '.join(errors))
+        instance.typed_rules = [CanonicalThreatRule.model_validate(rule) for rule in instance.threats]
+        identifiers = [rule.id for rule in instance.typed_rules]
+        if len(set(identifiers)) != len(identifiers):
+            raise ValueError('Release contains duplicate rule IDs.')
+        instance.validation_issues = []
+        instance.quarantined_rules = []
+        instance.loaded_modules = sorted({rule.source_module for rule in instance.typed_rules})
+        instance.governance_audit = {**audit_contracts(instance.threats), 'quarantined': []}
+        instance.threats_by_id, instance.threats_by_component, instance.threats_by_cloud = {}, {}, {}
+        instance._build_indexes()
+        instance.release_provenance = {'mode': 'unpublished_snapshot', 'independent_accuracy_established': False}
+        return instance
     
     def load_all(self):
         """Load all threat modules"""
@@ -82,6 +120,7 @@ class ThreatKnowledgeBase:
         self.validation_issues = []
         self.loaded_modules = []
         self.typed_rules = []
+        self.quarantined_rules = []
 
         modules = self._discover_modules()
         
@@ -95,9 +134,14 @@ class ThreatKnowledgeBase:
             rule["framework_mapping_issues"] = issues
             self.validation_issues.extend({"module": rule["source_module"], "issue": f"{rule['id']}: {issue}"} for issue in issues)
         self.typed_rules = [CanonicalThreatRule.model_validate(item) for item in self.threats]
+        self.governance_audit = {**audit_contracts(self.threats), 'quarantined': self.quarantined_rules}
         
         # Build indexes
         self._build_indexes()
+        self.release_provenance = {'mode': 'bundled', 'schema_version': 'canonical-kb-3.0',
+            'content_digest': hashlib.sha256(json.dumps(self.threats, sort_keys=True,
+                separators=(',', ':')).encode()).hexdigest(), 'activation_revision': None,
+            'independent_accuracy_established': False}
         
         logger.info(
             "Loaded %s normalized threats from %s modules (%s validation issues)",
@@ -167,7 +211,22 @@ class ThreatKnowledgeBase:
                 
                 self.loaded_modules.append(filename)
                 for threat in threats:
-                    threat["_source_module"] = filename
+                    if isinstance(threat, dict):
+                        threat["_source_module"] = filename
+                        if filename not in BUNDLED_MODULES:
+                            threat['origin'] = 'external'
+                if filename in BUNDLED_MODULES:
+                    curated = []
+                    for threat in threats:
+                        if not isinstance(threat, dict):
+                            curated.append(threat)
+                            continue
+                        updated, issue = apply_legacy_curation(threat)
+                        curated.append(updated)
+                        if issue:
+                            self.validation_issues.append({'module': filename,
+                                'issue': f"{threat.get('id') or threat.get('threat_id')}: {issue}"})
+                    threats = curated
                 logger.debug(f"Loaded {len(threats)} threats from {filename}")
                 return threats
                 
@@ -182,7 +241,19 @@ class ThreatKnowledgeBase:
     def _normalize_and_merge(self, raw_threats: List[Dict]) -> List[Dict]:
         merged: Dict[str, Dict] = {}
         for index, raw in enumerate(raw_threats, 1):
-            normalized = self._normalize_threat(raw, index)
+            if not isinstance(raw, dict):
+                self.validation_issues.append({'module': 'unknown', 'issue': 'Rule must be a JSON object.'})
+                continue
+            reason = quarantine_reason(raw)
+            if reason:
+                self.quarantined_rules.append({'rule_id': raw.get('id'), 'module': raw.get('_source_module'), 'reason': reason})
+                continue
+            try:
+                normalized = self._normalize_threat(raw, index)
+            except (ValueError, TypeError, AttributeError) as exc:
+                self.validation_issues.append({'module': str(raw.get('_source_module') or 'unknown'),
+                    'issue': f"Threat {raw.get('id', index)} could not be normalized: {exc}"})
+                continue
             if normalized["stride_category"] not in STRIDE_CATEGORIES:
                 self.validation_issues.append({
                     "module": normalized["source_module"],
@@ -195,6 +266,12 @@ class ThreatKnowledgeBase:
                     "module": normalized["source_module"],
                     "issue": f"Threat {normalized['id']}: {message}",
                 } for message in schema_errors)
+                continue
+            try:
+                CanonicalThreatRule.model_validate(normalized)
+            except ValidationError as exc:
+                self.validation_issues.append({'module': normalized['source_module'],
+                    'issue': f"Threat {normalized['id']} failed its typed contract: {exc}"})
                 continue
             threat_id = normalized["id"]
             if threat_id in merged:
@@ -249,12 +326,12 @@ class ThreatKnowledgeBase:
             "owasp_top_10": _as_list(raw.get("owasp_top_10") or mapped.get("owasp_top_10") or references.get("owasp_top_10")),
             "nist_800_53": _as_list(raw.get("nist_800_53") or mapped.get("nist_800_53") or references.get("nist_800_53")),
         }
-        fallback = TAXONOMY_FALLBACKS.get(category, {})
+        fallback = {} if raw.get('taxonomy_policy') == 'explicit_only' else TAXONOMY_FALLBACKS.get(category, {})
         cwe = explicit_taxonomies["cwe"] or list(fallback.get("cwe") or [])
         owasp_top_10 = explicit_taxonomies["owasp_top_10"] or list(fallback.get("owasp_top_10") or [])
         nist_800_53 = explicit_taxonomies["nist_800_53"] or list(fallback.get("nist_800_53") or [])
         taxonomy_mapping_quality = {
-            key: "curated" if values else "stride_category_fallback"
+            key: "curated" if values else "unmapped" if raw.get('taxonomy_policy') == 'explicit_only' else "stride_category_fallback"
             for key, values in explicit_taxonomies.items()
         }
         detection = raw.get("detection") if isinstance(raw.get("detection"), dict) else {}
@@ -341,6 +418,14 @@ class ThreatKnowledgeBase:
             "verification": str(raw.get("verification") or ""),
             "review_status": str(raw.get("review_status") or "legacy_unreviewed"),
             "last_reviewed": raw.get("last_reviewed"),
+            "counterexamples": _as_list(raw.get("counterexamples")),
+            "source_version": raw.get("source_version"),
+            "source_checked_at": raw.get("source_checked_at"),
+            "curation": raw.get("curation") or {},
+            "mapping_rationale": raw.get("mapping_rationale"),
+            "test_contract": raw.get("test_contract") or {},
+            "approval": raw.get("approval") or {},
+            "lifecycle": raw.get("lifecycle", "active"),
             "predicate_support": {
                 "status": "supported" if auto_detectable else "candidate_only",
                 "element_kind": "flow" if components and all(re.sub(r'[\s_-]+', '', item.lower()) == 'dataflow' for item in components) else "component",
@@ -454,6 +539,7 @@ class ThreatKnowledgeBase:
         return {
             'total_threats': len(self.threats),
             'schema_version': 'canonical-kb-3.0',
+            'release_provenance': deepcopy(getattr(self, 'release_provenance', {})),
             'modules': len(self.loaded_modules),
             'validation_issues': self.validation_issues,
             'by_component': {k: len(v) for k, v in self.threats_by_component.items()},
@@ -557,14 +643,28 @@ def get_knowledge_base() -> ThreatKnowledgeBase:
     """Get or create global knowledge base instance"""
     global _kb_instance
     if _kb_instance is None:
-        _kb_instance = ThreatKnowledgeBase()
+        _kb_instance = _load_configured_knowledge_base()
     return _kb_instance
 
 
 def reload_knowledge_base() -> ThreatKnowledgeBase:
-    """Reload the knowledge base from disk."""
+    """Reload at startup/maintenance, not inside an in-flight shared engine."""
     global _kb_instance
     registry.cache_clear()
     rule_mappings.cache_clear()
-    _kb_instance = ThreatKnowledgeBase()
+    # A failed configured release load must never fall back to the old singleton.
+    _kb_instance = None
+    _kb_instance = _load_configured_knowledge_base()
     return _kb_instance
+
+
+def _load_configured_knowledge_base():
+    database = os.getenv('AEGIS_KB_RELEASE_DB', '').strip()
+    if not database:
+        return ThreatKnowledgeBase()
+    if not Path(database).is_file():
+        raise RuntimeError('AEGIS_KB_RELEASE_DB does not identify an existing release database; refusing bundled fallback.')
+    # Local import avoids a loader/releases initialization cycle.
+    from .releases import KnowledgeReleaseStore
+
+    return KnowledgeReleaseStore(database).load_active()

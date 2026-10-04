@@ -37,6 +37,9 @@ def holdout_gate(corpus, training=(), minimum_scenarios=100):
         reasons.append(f'At least {minimum_scenarios} reviewed scenarios are required.')
     if len({fingerprint(item.get('query')) for item in corpus}) != len(corpus):
         reasons.append('Repeated queries do not count as independent scenarios.')
+    families = {item.get('architecture_family') for item in corpus if item.get('architecture_family')}
+    if len(families) < minimum_scenarios:
+        reasons.append(f'At least {minimum_scenarios} distinct architecture families are required; variants do not increase this count.')
     if any(not str(item.get('query') or '').strip() for item in corpus):
         reasons.append('Evaluation queries must not be empty.')
     if any(item.get('source') in {'validated_canonical_knowledge_base', 'rule_generated'} for item in corpus):
@@ -62,6 +65,8 @@ def wilson_interval(successes, total):
 
 
 def detection_metrics(tp, fp, fn):
+    if any(not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in (tp, fp, fn)):
+        raise ValueError('Detection counts must be non-negative integers.')
     return {'true_positive': tp, 'false_positive': fp, 'false_negative': fn,
         'precision': tp / (tp + fp) if tp + fp else None,
         'recall': tp / (tp + fn) if tp + fn else None,

@@ -1,11 +1,12 @@
 import { API_BASE_URL } from '../config';
+import { workspaceAuthHeaders } from './workspaceAuth';
 
 export async function recordFindingFeedback({ projectName, threat, decision }) {
   const explanation = threat?.explanation || {};
   const provenance = explanation.retrieval_provenance || explanation.provenance || {};
   const response = await fetch(`${API_BASE_URL}/feedback/findings`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...workspaceAuthHeaders() },
     body: JSON.stringify({
       project_name: projectName,
       finding_id: threat.id,

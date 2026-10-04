@@ -1,0 +1,3 @@
+export const applicationTypes = { ui: 'UI', frontend: 'Frontend', backend: 'Backend', web: 'Web application', mobile: 'Mobile application', api: 'API or service', other: 'Other' };
+export const reportTypes = { threat_modeling: 'Threat Modeling', sast: 'SAST', penetration_testing: 'Penetration Testing', sca: 'SCA', foss: 'FOSS', container_security: 'Container Security', secret_detection: 'Secret Detection', other: 'Other' };
+export const reviewStatuses = { pending_review: 'Pending Review', in_review: 'In Review', action_required: 'Action Required', accepted: 'Accepted Risk', false_positive: 'False Positive', mitigation_proposed: 'Mitigation Proposed', verified_fixed: 'Verified Fixed' };

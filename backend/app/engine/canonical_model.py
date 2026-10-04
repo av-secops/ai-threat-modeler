@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import re
+import hashlib
+import json
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..models import SystemArchitecture
 from . import source_index as sources
-from .control_contracts import boundary_dimensions, presence
+from .control_contracts import boundary_dimensions, boundary_members, presence
 from .source_correlation import reconcile_claims, source_metadata
 
 
@@ -21,7 +23,8 @@ CONTROL_KEYS = (
 
 BLOCKING_ISSUE_TYPES = {
     "duplicate_component_id", "invalid_flow", "invalid_boundary_membership",
-    "contradictory_control", "source_conflict",
+    "source_conflict",
+    "duplicate_flow_id", "duplicate_flow_number", "invalid_boundary_parent", "boundary_cycle",
 }
 
 
@@ -37,6 +40,7 @@ def canonicalize_architecture(architecture: SystemArchitecture) -> Tuple[SystemA
     metadata['source_documents'] = source_documents
     index = sources.build(source_text)
     component_ids = {component.id for component in architecture.components or []}
+    memberships = boundary_members(architecture)
     components_by_id = {component.id: component for component in architecture.components or []}
     issues: List[Dict[str, Any]] = []
     source_conflicts = _source_conflicts(source_documents)
@@ -62,10 +66,11 @@ def canonicalize_architecture(architecture: SystemArchitecture) -> Tuple[SystemA
 
     for component in architecture.components or []:
         props = component.properties or {}
-        props['canonical_boundaries'] = sorted(b.name for b in architecture.trust_boundaries if component.id in b.components)
+        props['canonical_boundaries'] = sorted(b.name for index, b in enumerate(architecture.trust_boundaries) if component.id in memberships[index])
         line_number, statement = _find_component_evidence(source_text, component.name, component.id, index)
-        explicit = bool(statement) or bool(props.get("authoritative") or props.get("authoritative_external_entity"))
-        component.confidence = "High" if explicit else "Medium"
+        explicit = bool(statement) or bool(props.get("authoritative") or props.get("authoritative_external_entity") or props.get('reviewer_declared')) or any(
+            e.get('source_type') == 'diagram_import' and e.get('evidence_basis') == 'source_design' for e in component.evidence)
+        component.confidence = "High" if explicit else "Low" if props.get('diagram_review_required') else "Medium"
         citation = index.cite(line_number)
         component.evidence = component.evidence or [_evidence(
             "architecture_input" if explicit else "inference",
@@ -117,8 +122,24 @@ def canonicalize_architecture(architecture: SystemArchitecture) -> Tuple[SystemA
                 ))
 
     flow_keys = set()
+    flow_ids, flow_numbers = set(), set()
+    next_number = max([int(f.flow_number[2:]) for f in architecture.flows
+        if re.fullmatch(r'F-\d+', f.flow_number or '')] or [0]) + 1
     boundary_crossings = []
     for flow in architecture.flows or []:
+        if not flow.id:
+            signature = [flow.source_id, flow.target_id, flow.protocol, flow.data_type,
+                flow.description, (flow.properties or {}).get('evidence')]
+            flow.id = (flow.properties or {}).get('review_id') or 'flow-' + hashlib.sha256(
+                json.dumps(signature, sort_keys=True, default=str).encode()).hexdigest()[:20]
+        if not flow.flow_number:
+            flow.flow_number = f'F-{next_number:03d}'
+            next_number += 1
+        for value, seen, kind in ((flow.id, flow_ids, 'duplicate_flow_id'),
+                                 (flow.flow_number, flow_numbers, 'duplicate_flow_number')):
+            if value in seen:
+                issues.append(_gap(kind, value, 'Each data flow requires a unique identity and trace number.', 'High'))
+            seen.add(value)
         explicit = not flow.assumed
         statement = (flow.properties or {}).get("evidence") or (
             f"Explicit flow {flow.source_id} to {flow.target_id}." if explicit
@@ -169,7 +190,19 @@ def canonicalize_architecture(architecture: SystemArchitecture) -> Tuple[SystemA
                 "dimensions": dimensions,
             })
 
+    boundaries_by_id = {b.id: b for b in architecture.trust_boundaries if b.id}
     for boundary in architecture.trust_boundaries or []:
+        if boundary.parent_id and boundary.parent_id not in boundaries_by_id:
+            issues.append(_gap('invalid_boundary_parent', boundary.id or boundary.name,
+                'The parent trust boundary does not exist.', 'High'))
+        parent, seen = boundary, set()
+        while parent and parent.id:
+            if parent.id in seen:
+                issues.append(_gap('boundary_cycle', boundary.id or boundary.name,
+                    'Trust boundary containment must not contain cycles.', 'High'))
+                break
+            seen.add(parent.id)
+            parent = boundaries_by_id.get(parent.parent_id)
         unknown_members = sorted(set(boundary.components or []) - component_ids)
         if unknown_members:
             issues.append(_gap(
@@ -216,6 +249,8 @@ def canonicalize_architecture(architecture: SystemArchitecture) -> Tuple[SystemA
     metadata["architecture_contract"] = {
         "component_ids_unique": not any(item["type"] == "duplicate_component_id" for item in issues),
         "flows_resolve": not any(item["type"] == "invalid_flow" for item in issues),
+        "flow_ids_unique": not any(item['type'] == 'duplicate_flow_id' for item in issues),
+        "flow_numbers_unique": not any(item['type'] == 'duplicate_flow_number' for item in issues),
         "boundaries_resolve": not any(item["type"] == "invalid_boundary_membership" for item in issues),
         "controls_consistent": not any(item["type"] == "contradictory_control" for item in issues),
         "evidence_required": True,

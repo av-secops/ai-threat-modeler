@@ -1,4 +1,6 @@
 import re
+import json
+from copy import deepcopy
 from typing import Dict, List, Tuple
 
 from ..models import Threat
@@ -26,7 +28,7 @@ def deduplicate_threats(threat_list: List[Threat]) -> List[Threat]:
             ])))
             asset_scope = sorted(set(filter(None, [threat.asset, *(threat.affected_assets or [])])))
             scope_key = "|".join(component_scope + flow_scope + asset_scope) or "unscoped"
-            group_key = (cwe_key, stride_key, root_cause_key, scope_key)
+            group_key = (cwe_key, stride_key, root_cause_key, scope_key, evidence_scope(threat))
 
         if group_key not in grouped:
             grouped[group_key] = threat.model_copy(deep=True)
@@ -39,6 +41,7 @@ def deduplicate_threats(threat_list: List[Threat]) -> List[Threat]:
             continue
 
         existing = grouped[group_key]
+        merge_finding_evidence(existing, threat)
         existing.affected_components = _merge_unique(existing.affected_components, threat.affected_components or [])
         existing.affected_data_flows = _merge_unique(existing.affected_data_flows, threat.affected_data_flows or [])
         existing.affected_assets = _merge_unique(existing.affected_assets, threat.affected_assets or [])
@@ -108,8 +111,49 @@ def _merge_evidence_details(left: List[Dict], right: List[Dict]) -> List[Dict]:
     merged = []
     seen = set()
     for item in [*(left or []), *(right or [])]:
-        key = (item.get("source_type"), item.get("source_ref"), item.get("line"), item.get("statement"))
+        key = json.dumps(item, sort_keys=True, default=str)
         if key not in seen:
             seen.add(key)
             merged.append(item)
     return merged
+
+
+def evidence_scope(threat: Threat) -> str:
+    scopes = {(json.dumps(e['scope'], sort_keys=True, default=str))
+        for e in threat.evidence_details or [] if e.get('scope') and any(e['scope'].values())}
+    explicit = (threat.explanation or {}).get('scope')
+    if explicit:
+        scopes.add(json.dumps(explicit, sort_keys=True, default=str))
+    return '|'.join(sorted(scopes))
+
+
+def merge_finding_evidence(keeper: Threat, other: Threat, *, supporting_only: bool = False) -> None:
+    """Retain provenance and reviewer decisions when a producer is superseded."""
+    taxonomies = ('cwe', 'owasp_top_10', 'mitre_attack', 'mitre_atlas', 'nist_800_53')
+    for field in ('evidence', 'evidence_details', 'preconditions', 'affected_flow_refs',
+                  *(() if supporting_only else taxonomies)):
+        setattr(keeper, field, deepcopy(_merge_unique(getattr(keeper, field), getattr(other, field))))
+    left, right = dict(keeper.explanation or {}), dict(other.explanation or {})
+    combined = {**deepcopy(right), **deepcopy(left)}
+    if supporting_only:
+        combined['superseded_candidate_mappings'] = _merge_unique(left.get('superseded_candidate_mappings', []),
+            [{'finding_id': other.id, 'tier': other.tier, **{key: getattr(other, key) for key in taxonomies}}])
+    combined['merged_finding_ids'] = _merge_unique(left.get('merged_finding_ids') or [keeper.id],
+        right.get('merged_finding_ids') or [other.id])
+    for field in ('matched_controls', 'issue_ids', 'correlated_evidence', 'flow_context', 'rule_provenances',
+                  'merged_review_decisions', 'merged_severity_decisions'):
+        # Some older producers used dictionaries for context fields.
+        if isinstance(left.get(field, []), list) and isinstance(right.get(field, []), list):
+            combined[field] = deepcopy(_merge_unique(left.get(field, []), right.get(field, [])))
+    combined['rule_provenances'] = _merge_unique(combined.get('rule_provenances', []),
+        [p for p in (left.get('rule_provenance'), right.get('rule_provenance')) if p])
+    combined['merged_severity_decisions'] = _merge_unique(combined.get('merged_severity_decisions', []), [
+        {'finding_id': t.id, 'severity': t.severity, 'basis': t.severity_source} for t in (keeper, other)])
+    decisions = [{'finding_id': t.id, 'review_status': t.review_status, 'review_state': t.review_state}
+        for t in (keeper, other)]
+    combined['merged_review_decisions'] = _merge_unique(combined.get('merged_review_decisions', []), decisions)
+    if keeper.review_status != other.review_status or keeper.review_state != other.review_state:
+        keeper.review_status = 'pending_review'
+        keeper.review_state = 'open'
+        combined['review_conflict'] = True
+    keeper.explanation = combined

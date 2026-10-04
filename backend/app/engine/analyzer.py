@@ -356,6 +356,7 @@ class ThreatAnalyzer:
         result.stride_coverage = stride_coverage
         result.architecture_validation = architecture_validation
         result.engine_status = {
+            "assessment_mode": "diagnostic_unreviewed",
             "canonical_model": {"status": "active", "version": architecture_validation["version"]},
             "rule_engine": {"status": "active", "findings": len(threats)},
             "knowledge_base": {
@@ -372,6 +373,8 @@ class ThreatAnalyzer:
                 "validation_issues": len(self.knowledge_base.validation_issues),
                 "validation_issue_details": self.knowledge_base.validation_issues[:50],
                 "quality_audit": self.knowledge_quality_audit,
+                "governance": self.knowledge_base.governance_audit,
+                "release": getattr(self.knowledge_base, 'release_provenance', None),
                 **kb_diagnostics,
             },
             "specialist_router": specialist_route,
@@ -579,6 +582,8 @@ class ThreatAnalyzer:
         ]
         completeness_warnings = [
             check for check in (
+                ("conflicting_control_evidence", sum(item.get('type') == 'contradictory_control' for item in architecture_validation.get('issues', [])),
+                 "Sources disagree about security controls. Resolve the cited statements before security sign-off."),
                 ("omitted_named_components", omitted_components,
                  "A component named in the input is absent from the model."),
                 ("duplicate_component_aliases", duplicate_aliases,
@@ -648,12 +653,14 @@ class ThreatAnalyzer:
     @staticmethod
     def _suppress_potentials_superseded_by_known_issues(threats: List[Threat]) -> List[Threat]:
         """Suppress only a question about the same control and complete scope."""
+        from .deduplication_engine import evidence_scope, merge_finding_evidence
+
         def scope(threat):
             components = set(threat.affected_components or [])
             components.update(filter(None, [threat.component, threat.affected_component]))
             flows = set(threat.affected_data_flows or [])
             flows.update(filter(None, [threat.data_flow, threat.related_data_flow]))
-            return frozenset(components), frozenset(flows)
+            return frozenset(components), frozenset(flows), evidence_scope(threat)
 
         confirmed_claims = []
         for threat in threats:
@@ -664,19 +671,20 @@ class ThreatAnalyzer:
                 continue
             controls = set((threat.explanation or {}).get("matched_controls") or [])
             if controls:
-                confirmed_claims.append((scope(threat), controls, threat.stride_category or threat.category, (threat.cwe or [None])[0]))
+                confirmed_claims.append((scope(threat), controls, threat.stride_category or threat.category, (threat.cwe or [None])[0], threat))
 
         filtered = []
         for threat in threats:
             category = threat.stride_category or threat.category
             controls = set((threat.explanation or {}).get("matched_controls") or [])
-            superseded = threat.tier == "Potential" and bool(controls) and any(
-                scope(threat) == known_scope and category == known_category and controls <= known_controls
-                and bool(threat.cwe) and threat.cwe[0] == known_cwe
-                for known_scope, known_controls, known_category, known_cwe in confirmed_claims
-            )
-            if not superseded:
+            keeper = next((known for known_scope, known_controls, known_category, known_cwe, known in confirmed_claims
+                if threat.tier == "Potential" and controls and scope(threat) == known_scope
+                and category == known_category and controls <= known_controls
+                and threat.cwe and threat.cwe[0] == known_cwe), None)
+            if keeper is None:
                 filtered.append(threat)
+            else:
+                merge_finding_evidence(keeper, threat, supporting_only=True)
         return filtered
 
     #: How authoritative a finding about a control is, most authoritative last.
@@ -696,6 +704,8 @@ class ThreatAnalyzer:
         problem, so the most specific is kept and the others' framework mappings
         and evidence are folded into it.
         """
+        from .deduplication_engine import evidence_scope, merge_finding_evidence
+
         def authority(threat: Threat) -> float:
             if (threat.explanation or {}).get('origin') == 'declared_known_issue':
                 # Preserve the owner's stable issue identifier when correlation
@@ -713,18 +723,35 @@ class ThreatAnalyzer:
                 tuple(sorted(set(filter(None, [threat.data_flow, threat.related_data_flow,
                     *(threat.affected_data_flows or [])])))),
                 (threat.stride_category or threat.category),
-                (threat.cwe or [None])[0],
+                evidence_scope(threat),
             )
 
         claims = {}
+        control_groups = {}
         for threat in threats:
             if threat.tier != "Confirmed":
                 continue
             controls = (threat.explanation or {}).get("matched_controls") or []
+            values = (threat.explanation or {}).get("matched_control_values") or {}
+            # Capability guards (such as having webhooks) are prerequisites,
+            # not additional missing controls that make the weakness distinct.
+            controls = [control for control in controls
+                if not (control.startswith("has_") and values.get(control) is True)] or controls
             component = threat.component or threat.affected_component
-            for control in controls:
-                if component and threat.cwe:
-                    claims.setdefault((scope(threat), control), []).append(threat)
+            if controls and component and threat.cwe:
+                key = (scope(threat), tuple(sorted(set(controls))))
+                groups = control_groups.setdefault(key, [])
+                # Require a CWE common to every member, not a transitive chain
+                # through a broad rule that happens to name several weaknesses.
+                group = next((g for g in groups if g['cwes'] & set(threat.cwe)), None)
+                if group is None:
+                    groups.append({'cwes': set(threat.cwe), 'members': [threat]})
+                else:
+                    group['cwes'] &= set(threat.cwe)
+                    group['members'].append(threat)
+        for key, groups in control_groups.items():
+            for index, group in enumerate(groups):
+                claims[(key, index)] = group['members']
 
         signature_claims = {}
         for threat in threats:
@@ -732,8 +759,8 @@ class ThreatAnalyzer:
                 continue
             component = threat.component or threat.affected_component
             signature = cls._root_signature(threat)
-            if component and signature:
-                signature_claims.setdefault((scope(threat), signature), []).append(threat)
+            if component and signature and not (threat.explanation or {}).get('matched_controls'):
+                signature_claims.setdefault((scope(threat) + ((threat.cwe or [None])[0],), signature), []).append(threat)
         for (finding_scope, signature), duplicates in signature_claims.items():
             if len(duplicates) > 1:
                 claims[(finding_scope, f"root:{signature}")] = duplicates
@@ -753,6 +780,7 @@ class ThreatAnalyzer:
                 continue
             while id(keeper) in superseded:
                 keeper = superseded[id(keeper)]
+            merge_finding_evidence(keeper, threat)
             keeper.cwe = _merge(keeper.cwe, threat.cwe)
             keeper.owasp_top_10 = _merge(keeper.owasp_top_10, threat.owasp_top_10)
             keeper.mitre_attack = _merge(keeper.mitre_attack, threat.mitre_attack)
@@ -896,6 +924,8 @@ class ThreatAnalyzer:
         threat.evidence = [*(threat.evidence or []), evidence]
         threat.evidence_details = [*(threat.evidence_details or []), {
             "source_type": "architecture_input",
+            "stated_weakness_rule": rule['id'],
+            "evidence_basis": "user_declared",
             "source_ref": threat.component,
             "line": None,
             "statement": statement,
@@ -982,6 +1012,8 @@ class ThreatAnalyzer:
                     evidence_details=[{
                         "source_type": "architecture_input",
                         "source_ref": component.id,
+                        "stated_weakness_rule": rule['id'],
+                        "evidence_basis": "user_declared",
                         "line": None,
                         "statement": statement,
                         "confidence": "High",
@@ -1047,6 +1079,8 @@ class ThreatAnalyzer:
                 evidence_details=[{
                     "source_type": "architecture_input",
                     "source_ref": "unresolved_component",
+                    "stated_weakness_rule": rule['id'],
+                    "evidence_basis": "user_declared",
                     "line": None,
                     "statement": statement,
                     "confidence": "High",
@@ -1139,6 +1173,8 @@ class ThreatAnalyzer:
         return threats
 
     def _process_known_issues(self, architecture: SystemArchitecture, threats: List[Threat]) -> List[Threat]:
+        from .control_statements import CONTROL_TERMS
+
         metadata = architecture.metadata or {}
         known_issues = metadata.get("known_issues", [])
         component_ids = {component.id for component in architecture.components or []}
@@ -1199,7 +1235,8 @@ class ThreatAnalyzer:
                     "origin": "declared_known_issue",
                     "scope_resolution": issue.get("component_resolution", "unresolved"),
                     "scope_warning": None if primary_component else "Confirmed source issue; affected component requires analyst mapping.",
-                    "matched_controls": list(CONTROL_PROPERTIES.get(issue.get("control"), ())),
+                    "matched_controls": list(CONTROL_PROPERTIES.get(issue.get("control"),
+                        (issue["control"],) if issue.get("control") in CONTROL_TERMS else ())),
                 },
             )
             threats.append(threat)
@@ -1312,6 +1349,7 @@ class ThreatAnalyzer:
         components = {item.id: item for item in (architecture.components if architecture else [])}
         flow_list = list(architecture.flows if architecture else [])
         flows = {f"{item.source_id}->{item.target_id}": item for item in flow_list}
+        flows.update({item.id: item for item in flow_list if item.id})
         for threat in threats:
             # An authored severity is a floor; a computed one is not. This used to
             # key off evidence_details being populated, which meant the floor
@@ -1471,6 +1509,8 @@ class ThreatAnalyzer:
         for flow in architecture.flows or []:
             properties = flow.properties or {}
             described = {
+                'id': flow.id,
+                'flow_number': flow.flow_number,
                 'label': f"{names.get(flow.source_id, flow.source_id)} → "
                          f"{names.get(flow.target_id, flow.target_id)}",
                 'reference': f"{flow.source_id}->{flow.target_id}",
@@ -1503,7 +1543,7 @@ class ThreatAnalyzer:
         seen: set = set()
         for component_id in threat.affected_components or []:
             for flow in incident_flows.get(component_id, []):
-                key = (flow['reference'], flow['direction'])
+                key = (flow.get('id') or flow['reference'], flow['direction'])
                 if key not in seen:
                     seen.add(key)
                     related.append(flow)
@@ -1519,6 +1559,24 @@ class ThreatAnalyzer:
         else:
             explanation['flow_context'] = 'component_isolated'
         threat.explanation = explanation
+        names = {c.id: c.name for c in architecture.components}
+        references = list(dict.fromkeys([*(threat.affected_data_flows or []),
+            *([threat.data_flow] if threat.data_flow else []), *([threat.related_data_flow] if threat.related_data_flow else [])]))
+        matched, unresolved = {}, False
+        for reference in references:
+            normalized = str(reference).replace(' → ', '->').replace(' -> ', '->').removeprefix('flow:')
+            candidates = [f for f in architecture.flows if reference and reference in {f.id, f.flow_number}]
+            if not candidates:
+                candidates = [f for f in architecture.flows if reference and (reference == f.properties.get('review_id')
+                    or normalized in {f'{f.source_id}->{f.target_id}', f'{names.get(f.source_id)}->{names.get(f.target_id)}'})]
+            if len(candidates) == 1 and candidates[0].id:
+                f = candidates[0]
+                matched[f.id] = {'id': f.id, 'number': f.flow_number, 'source_id': f.source_id, 'target_id': f.target_id,
+                    'description': f.description, 'assumed': f.assumed}
+            else:
+                unresolved = True
+        threat.affected_flow_refs = list(matched.values())
+        threat.flow_reference_status = 'partially_unresolved' if unresolved and matched else 'unresolved' if unresolved else 'linked' if matched else 'not_flow_specific'
 
     def _attach_attack_paths(self, threats: List[Threat], attack_paths: List[Dict[str, Any]]) -> List[Threat]:
         paths_by_finding = {path.get("related_threat_id"): path for path in attack_paths}

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+import hashlib
+import json
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from ..models import Threat
@@ -27,6 +29,30 @@ ACTIVE_COMPONENTS = {
     "Identity Provider", "Queue", "IoT Device", "Load Balancer", "CDN",
 }
 DATA_COMPONENTS = {"Database", "Object Storage", "Data Warehouse", "Secrets Manager", "Backup"}
+
+
+def _is_prompt_model(element: Dict[str, Any]) -> bool:
+    if element.get("kind") != "component" or element.get("type") != "ML Service":
+        return False
+    # AI scope alone also covers classifiers and training pipelines. Require a
+    # modeled language-model identity, not an unrelated mention in source prose.
+    identity = " ".join(str(value or "") for value in (
+        element.get("id"), element.get("name"), element.get("properties", {}).get("technology")))
+    return bool(re.search(r"\b(?:llms?|large language models?|openai|bedrock|claude|gemini|ollama)\b",
+        re.sub(r"[_-]+", " ", identity), re.I))
+
+
+def coverage_flows(architecture):
+    """Keep legacy pair keys only where they unambiguously identify a flow."""
+    counts = Counter((flow.source_id, flow.target_id) for flow in architecture.flows)
+    for flow in architecture.flows:
+        pair = f'{flow.source_id}->{flow.target_id}'
+        if counts[(flow.source_id, flow.target_id)] == 1:
+            key = pair
+        else:
+            key = flow.id or flow.properties.get('review_id') or 'flow-' + hashlib.sha256(
+                json.dumps([flow.source_id, flow.target_id, flow.protocol, flow.data_type, flow.description]).encode()).hexdigest()[:20]
+        yield f'flow:{key}', flow
 
 
 class StrideCoverageEngine:
@@ -156,10 +182,10 @@ class StrideCoverageEngine:
                 "evidence": component.evidence or [],
                 "confidence": component.confidence,
             }
-        for flow in architecture.flows or []:
+        for key, flow in coverage_flows(architecture):
             yield {
-                "id": f"flow:{flow.source_id}->{flow.target_id}",
-                "name": f"{flow.source_id} -> {flow.target_id}",
+                "id": key,
+                "name": f"{flow.source_id} -> {flow.target_id}" + (f" ({flow.protocol}, {flow.flow_number or flow.id or 'unnumbered'})" if key != f'flow:{flow.source_id}->{flow.target_id}' else ''),
                 "kind": "flow",
                 "type": "Data Flow",
                 "trust_level": (flow.properties or {}).get("trust_boundary", "unknown"),
@@ -287,6 +313,8 @@ def _expected_controls(kind: str, category: str, element: Optional[Dict[str, Any
     if kind == "actor":
         return {"Spoofing": ["auth_type", "mfa_enabled"], "Repudiation": ["audit_logging"], "Elevation of Privilege": ["authorization"]}.get(category, controls)
     props = (element or {}).get("properties", {})
+    if category == "Tampering" and _is_prompt_model(element or {}):
+        return ["prompt_sanitization", "untrusted_context_separation", "output_validation"]
     if category == "Spoofing" and (element or {}).get("type") == "Identity Provider":
         controls = [*controls, "mfa_enabled", "token_revocation"]
     if category == "Denial of Service" and props.get("has_graphql") is True:
@@ -298,6 +326,8 @@ def _expected_controls(kind: str, category: str, element: Optional[Dict[str, Any
 
 def _risk_relevant(element: Dict[str, Any], category: str) -> bool:
     props = element["properties"]
+    if props.get('diagram_review_required'):
+        return False
     trust = element["trust_level"]
     kind = element["kind"]
     component_type = element["type"]
@@ -320,6 +350,8 @@ def _risk_relevant(element: Dict[str, Any], category: str) -> bool:
     if component_type in DATA_COMPONENTS and sensitive:
         return category in {"Tampering", "Repudiation", "Information Disclosure", "Denial of Service", "Elevation of Privilege"}
     if props.get("db_type") == "redis" and category in {"Spoofing", "Tampering", "Information Disclosure", "Denial of Service"}:
+        return True
+    if category == "Tampering" and _is_prompt_model(element):
         return True
     if component_type in {"API", "API Gateway", "Service", "ML Service"}:
         return category in {"Spoofing", "Elevation of Privilege"}
@@ -413,6 +445,8 @@ def _unknown_candidate_priority(element: Dict[str, Any], category: str) -> int:
         "Elevation of Privilege": {"Compute": 100, "API": 95, "Identity Provider": 90, "Object Storage": 85, "Data Flow": 75},
     }
     score = preferences.get(category, {}).get(component_type, 50) + (10 if exposed else 0)
+    if category == "Tampering" and _is_prompt_model(element):
+        score = 100 + (10 if exposed else 0)
     # Among flows, prefer the one that leaves a trust level over one that stays
     # inside it. Guessed paths are already excluded by _risk_relevant.
     score += 10 if props.get("crosses_trust_boundary") else 0
@@ -429,6 +463,14 @@ def _candidate_threat(element: Dict[str, Any], category: str, state: str, contro
     confidence = "High" if explicit_absence and element["confidence"] == "High" else "Medium"
     title = _title(category, element)
     mitigation = _mitigation(category, controls)
+    prompt_tampering = category == "Tampering" and _is_prompt_model(element)
+    if prompt_tampering:
+        mitigation = (
+            f"Validate {', '.join(controls)} for this model integration. Separate untrusted prompts and retrieved "
+            "content from trusted instructions; validate generated output before rendering, executing or passing "
+            "it to tools. Confirm the responsible component and test these boundaries with controlled inputs. "
+            "Prompt filtering alone does not establish protection against prompt injection."
+        )
     evidence_details = list(element.get("evidence") or [])
     evidence_details.append({
         "source_type": "coverage_assessment",
@@ -479,7 +521,8 @@ def _candidate_threat(element: Dict[str, Any], category: str, state: str, contro
         data_sensitivity=element["properties"].get("data_sensitivity") or element["properties"].get("sensitivity") or "internal",
         exploit_complexity="Low" if explicit_absence else "Medium",
         privilege_required="None" if element["trust_level"] in {"public", "external"} else "Low",
-        explanation={"coverage_element_id": element["id"], "control_state": state},
+        explanation={"coverage_element_id": element["id"], "control_state": state,
+            **({"matched_controls": controls, "scope_resolution": "component_profile"} if prompt_tampering else {})},
     )
 
 
@@ -497,6 +540,8 @@ def _cell(element: Dict[str, Any], category: str, status: str, rationale: str, f
 
 def _title(category: str, element: Dict[str, Any]) -> str:
     component_type = element["type"]
+    if category == "Tampering" and _is_prompt_model(element):
+        return f"Prompt injection and model-output integrity controls require validation for {element['name']}"
     specialized = {
         ("Spoofing", "API"): "Backend token validation and identity enforcement require validation",
         ("Spoofing", "Identity Provider"): "Identity-provider token and session controls require validation",
@@ -533,6 +578,12 @@ def _mitigation(category: str, controls: List[str]) -> str:
 
 
 def _scenario(category: str, element: Dict[str, Any]) -> str:
+    if category == "Tampering" and _is_prompt_model(element):
+        return (
+            f"If attacker-controlled prompts or retrieved content reach {element['name']}, an attacker may "
+            "redirect its behavior or influence generated output used downstream. Validate instruction/data "
+            "separation and output handling; neither reachability nor exploitation is established by this assessment."
+        )
     actions = {
         "Spoofing": "impersonates a trusted user, workload, or partner",
         "Tampering": "alters requests, messages, configuration, or stored data",

@@ -1,12 +1,12 @@
 export function releaseStatus(release) {
   if (!release.model_count) return 'Not started';
-  if (!release.reported_models) return 'Draft only';
+  if (!release.reported_models) return 'In progress';
   return release.draft_models ? 'Reports and drafts' : 'Report available';
 }
 
 export function releaseScopes(release) {
-  return [release.release_models > 0 && 'Complete release product',
-    release.application_models > 0 && 'Ad hoc application'].filter(Boolean);
+  return [release.release_models > 0 && 'Full release',
+    release.application_models > 0 && 'Applications'].filter(Boolean);
 }
 
 export function formatWorkspaceDate(value) {

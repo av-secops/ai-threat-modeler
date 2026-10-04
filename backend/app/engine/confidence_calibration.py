@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+import re
 from typing import Any, Dict, List, Tuple
 
 from ..models import Threat
@@ -21,7 +22,49 @@ SOURCE_WEIGHT = {
     "architecture": 0.55,
     "inference": 0.45,
 }
-DIRECT_SOURCES = {"code", "iac", "static_analysis", "architecture_input", "rule_evaluation", "coverage_assessment"}
+DIRECT_SOURCES = {"code", "iac", "static_analysis", "architecture_input"}
+
+
+def supporting_records(threat):
+    """Detector conclusions and topology approvals cannot prove control weaknesses."""
+    from .control_statements import read
+    controls = set((threat.explanation or {}).get('matched_controls') or [])
+    values = (threat.explanation or {}).get('matched_control_values') or {}
+    result = []
+    for record in threat.evidence_details or []:
+        if record.get('source_type') not in DIRECT_SOURCES or record.get('evidence_scope') == 'topology':
+            continue
+        if record.get('applicable') is False:
+            continue
+        if record.get('element_id') and threat.affected_components and record['element_id'] not in threat.affected_components:
+            continue
+        statement = str(record.get('statement') or '').strip()
+        if not statement or record.get('evidence_basis') in {'inferred', 'planned', 'unknown'}:
+            continue
+        if record.get('source_type') in {'code', 'iac', 'static_analysis'}:
+            if record.get('evidence_kind') != 'absence':
+                result.append(record)
+            continue
+        if record.get('state') in {'unknown', 'partial', 'planned', 'conflicting'}:
+            continue
+        if record.get('stated_weakness_rule'):
+            from .known_issue_taxonomy import CONTROL_PROPERTIES, classify_generic_weaknesses
+            matches = [rule for rule in classify_generic_weaknesses(statement)
+                if rule['id'] == record['stated_weakness_rule']]
+            if any(not controls or controls & set(CONTROL_PROPERTIES.get(rule['control'], ())) for rule in matches):
+                result.append(record)
+            continue
+        if record.get('control'):
+            value = values.get(record['control'])
+            expected = 'present' if value is True else 'absent'
+            if record.get('state') not in {None, expected}:
+                continue
+            if not controls or record['control'] in controls:
+                result.append(record)
+            continue
+        if re.fullmatch(r'K\d+', str(record.get('source_ref') or '')) or not controls or controls & set(read(statement).denied):
+            result.append(record)
+    return result
 
 
 class ConfidenceCalibrator:
@@ -32,6 +75,7 @@ class ConfidenceCalibrator:
         distribution = Counter()
         components = {item.id: item for item in architecture.components or []}
         for threat in threats:
+            supported = supporting_records(threat)
             sources = {
                 str(item.get("source_type") or "").lower()
                 for item in (threat.evidence_details or [])
@@ -42,7 +86,7 @@ class ConfidenceCalibrator:
             source_refs = {str(item.get("source_ref") or "") for item in (threat.evidence_details or [])}
             declared_issue = any(ref.startswith("K") and ref[1:].isdigit() for ref in source_refs)
             reviewer_evidence = any(item.get('evidence_basis') == 'user_declared'
-                or item.get('source_ref') == 'reviewer_clarification' for item in (threat.evidence_details or []))
+                or item.get('source_ref') == 'reviewer_clarification' for item in supported)
             if declared_issue:
                 source_score = max(source_score, 0.97)
 
@@ -70,7 +114,9 @@ class ConfidenceCalibrator:
                 score -= 0.12
             if not threat.root_cause or not (threat.attack_scenario or threat.realistic_attack_scenario):
                 score -= 0.05
-            direct = bool(sources & DIRECT_SOURCES) or threat.finding_type in {"code", "iac"}
+            direct = bool(supported)
+            if not direct:
+                score = min(score, .74)
             if not direct and threat.explanation and threat.explanation.get("local_stride_review", {}).get("decision"):
                 review = threat.explanation["local_stride_review"]
                 if review.get("predicted_category") not in {None, "Unknown", threat.stride_category, threat.category}:
@@ -86,10 +132,10 @@ class ConfidenceCalibrator:
             )
             if conflicting:
                 control_state = "conflicting"
-            unresolved = control_state in {"unknown", "partial", "conflicting"}
+            unresolved = control_state in {"unknown", "partial", "planned", "conflicting"}
             if unresolved:
                 score = min(score, 0.74)
-            if declared_issue and not unresolved:
+            if declared_issue and direct and not unresolved:
                 score = max(score, 0.9)
 
             label = "High" if score >= 0.8 else "Medium" if score >= 0.55 else "Low"
@@ -105,6 +151,7 @@ class ConfidenceCalibrator:
                     "score": score,
                     "label": label,
                     "direct_evidence": direct,
+                    "supporting_records": len(supported),
                     "evidence_sources": sorted(sources),
                     "scoped": scoped,
                     "assumed_flow": bool(flow and flow.assumed),

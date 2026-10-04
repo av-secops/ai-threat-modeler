@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
-import { ArrowDownWideNarrow, ChevronLeft, ChevronRight, RotateCcw, Search } from 'lucide-react';
+import { ArrowDownWideNarrow, ChevronLeft, ChevronRight } from 'lucide-react';
 import { ThreatSection } from './RiskRegister';
 import { affectedComponents, reviewStateMeta, severityOrder } from './theme';
+import FilterBar from '../FilterBar';
 
 const groups = [
     ['all', 'All findings'], ['evidenced', 'Evidenced'],
@@ -37,6 +38,12 @@ export default function FindingsWorkspace({ threats, filters, onFiltersChange, r
         setReview('all'); setGroup('all'); setPage(0);
     };
     const categories = [...new Set(threats.flatMap((threat) => threat.affected_stride_categories?.length ? threat.affected_stride_categories : [threat.stride_category || threat.category]))].filter(Boolean).sort();
+    const active = ['severity', 'category', 'tier', 'search'].filter(key => filters[key] && filters[key] !== 'all').map(key => ({ key,
+        label: `${{ severity: 'Severity', category: 'STRIDE', tier: 'Evidence', search: 'Search' }[key]}: ${filters[key]}`,
+        onRemove: () => update(key, key === 'search' ? '' : 'all'),
+    }));
+    if (review !== 'all') active.push({ key: 'review', label: `Status: ${reviewStateMeta[review]?.label || review}`, onRemove: () => { setReview('all'); setPage(0); } });
+    if (filters.impact || filters.likelihood) active.push({ key: 'matrix', label: `Matrix: ${filters.impact || 'Any'} impact / ${filters.likelihood || 'Any'} likelihood`, onRemove: () => { setPage(0); onFiltersChange({ ...filters, impact: undefined, likelihood: undefined }); } });
     return <div className="space-y-4">
         <div className="flex flex-wrap items-center gap-1 border-b border-brand-200 dark:border-brand-700" aria-label="Finding evidence filters">
             {groups.map(([id, label]) => <button key={id} type="button" aria-pressed={group === id}
@@ -45,12 +52,8 @@ export default function FindingsWorkspace({ threats, filters, onFiltersChange, r
                 {label}<span className="text-xs tabular-nums">{id === 'all' ? threats.length : threats.filter((threat) => kindOf(threat) === id).length}</span>
             </button>)}
         </div>
-        <div className="grid items-end gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(200px,2fr)_1fr_1.4fr_1fr_auto]">
-            <label className="text-xs font-medium text-brand-600 dark:text-brand-300">Search
-                <span className="relative mt-1 block"><Search className="pointer-events-none absolute left-3 top-3 h-4 w-4" />
-                    <input aria-label="Search findings" className="input-brand w-full pl-9 text-sm" placeholder="Risk, component, CWE..." value={filters.search} onChange={(event) => update('search', event.target.value)} />
-                </span>
-            </label>
+        <FilterBar label="Finding filters" resetLabel="Reset finding filters" active={active} onReset={clear} search={{ label: 'Search findings', placeholder: 'Risk, component, CWE...', value: filters.search, onChange: value => update('search', value) }}>
+        <div className="grid items-end gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <label className="text-xs font-medium text-brand-600 dark:text-brand-300">Severity
                 <select className="input-brand mt-1 w-full text-sm" value={filters.severity} onChange={(event) => update('severity', event.target.value)}>
                     <option value="all">All severities</option>{Object.keys(severityOrder).map((value) => <option key={value}>{value}</option>)}
@@ -66,8 +69,12 @@ export default function FindingsWorkspace({ threats, filters, onFiltersChange, r
                     <option value="all">All statuses</option>{Object.entries(reviewStateMeta).map(([value, meta]) => <option value={value} key={value}>{meta.label}</option>)}
                 </select>
             </label>
-            <button type="button" className="ui-button-secondary h-10 justify-center" title="Reset filters" aria-label="Reset finding filters" onClick={clear}><RotateCcw className="h-4 w-4" /></button>
-        </div>
+            <label className="text-xs font-medium text-brand-600 dark:text-brand-300">Evidence tier
+                <select className="input-brand mt-1 w-full text-sm" value={filters.tier} onChange={event => update('tier', event.target.value)}>
+                    <option value="all">All evidence tiers</option>{[...new Set(threats.map(threat => threat.tier).filter(Boolean))].sort().map(value => <option key={value}>{value}</option>)}
+                </select>
+            </label>
+        </div></FilterBar>
         <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-brand-600 dark:text-brand-300">
             <span role="status" aria-live="polite">{filtered.length} of {threats.length} findings{filters.impact && ` / ${filters.impact} impact, ${filters.likelihood} likelihood`}</span>
             <label className="flex items-center gap-2"><ArrowDownWideNarrow className="h-4 w-4" /><span className="sr-only">Sort findings</span>
@@ -76,7 +83,7 @@ export default function FindingsWorkspace({ threats, filters, onFiltersChange, r
                 </select>
             </label>
         </div>
-        <ThreatSection threats={filtered.slice(currentPage * 25, (currentPage + 1) * 25)} onSelectThreat={onSelectThreat} compact />
+        <ThreatSection threats={filtered.slice(currentPage * 25, (currentPage + 1) * 25)} onSelectThreat={onSelectThreat} reviewStates={reviewStates} compact />
         <div className="flex items-center justify-end gap-3 text-sm text-brand-600 dark:text-brand-300">
             <span>Page {currentPage + 1} of {pages}</span>
             <button className="ui-button-secondary disabled:opacity-40" aria-label="Previous findings page" title="Previous page" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}><ChevronLeft className="h-4 w-4" /></button>

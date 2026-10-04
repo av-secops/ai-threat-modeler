@@ -46,6 +46,19 @@ class ProductStore:
                 CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY,actor TEXT NOT NULL,state TEXT NOT NULL,payload TEXT NOT NULL,result TEXT,error TEXT,updated REAL NOT NULL,owner TEXT);
                 CREATE INDEX IF NOT EXISTS workspaces_by_release ON workspaces(release_id,updated);
                 CREATE INDEX IF NOT EXISTS jobs_by_state ON jobs(state,updated);
+                CREATE TABLE IF NOT EXISTS comparisons(id TEXT PRIMARY KEY,product_id TEXT NOT NULL REFERENCES products(id),
+                    name TEXT NOT NULL,request TEXT NOT NULL,payload TEXT NOT NULL,review TEXT NOT NULL,
+                    version INTEGER NOT NULL,actor TEXT NOT NULL,created REAL NOT NULL,updated REAL NOT NULL);
+                CREATE INDEX IF NOT EXISTS comparisons_by_product ON comparisons(product_id,created);
+                CREATE TABLE IF NOT EXISTS dashboard_observations(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    product_id TEXT NOT NULL REFERENCES products(id),
+                    fingerprint TEXT NOT NULL, policy TEXT NOT NULL, body TEXT NOT NULL,
+                    observed REAL NOT NULL);
+                CREATE INDEX IF NOT EXISTS dashboard_history ON dashboard_observations(product_id,id);
+                CREATE TABLE IF NOT EXISTS assessment_lineage(
+                    target_id TEXT PRIMARY KEY REFERENCES workspaces(id),
+                    source_id TEXT NOT NULL REFERENCES workspaces(id), created REAL NOT NULL);
             ''')
             db.execute('BEGIN IMMEDIATE')
             columns = {row['name'] for row in db.execute('PRAGMA table_info(releases)')}
@@ -56,6 +69,19 @@ class ProductStore:
                 SELECT MIN(at) FROM audit WHERE target=releases.id
                 AND action IN ('create_releases','clone_release')
             ) WHERE created_at IS NULL''')
+
+    @contextmanager
+    def read_snapshot(self):
+        """Read without taking the writer reservation used by mutation transactions."""
+        db = sqlite3.connect(self.path, timeout=10)
+        db.row_factory = sqlite3.Row
+        try:
+            db.execute('PRAGMA query_only=ON')
+            db.execute('BEGIN')
+            yield db
+        finally:
+            db.rollback()
+            db.close()
 
     @contextmanager
     def connect(self):
@@ -82,7 +108,7 @@ class ProductStore:
 
     @staticmethod
     def require(db, table, identifier):
-        if table not in {'products', 'applications', 'releases', 'workspaces', 'jobs'}:
+        if table not in {'products', 'applications', 'releases', 'workspaces', 'jobs', 'comparisons'}:
             raise ValueError('Invalid record type')
         row = db.execute(f'SELECT * FROM {table} WHERE id=?', (identifier,)).fetchone()
         if not row:
@@ -90,11 +116,17 @@ class ProductStore:
         return dict(row)
 
     def list_products(self):
-        with self.connect() as db:
-            return [dict(r) for r in db.execute('SELECT * FROM products ORDER BY name_key')]
+        with self.read_snapshot() as db:
+            return [dict(r) for r in db.execute('''SELECT p.*,
+                COUNT(DISTINCT r.id) AS release_count,
+                COUNT(DISTINCT CASE WHEN COALESCE(json_array_length(w.payload,'$.revisions'),0)>0 THEN w.application_id END) AS assessed_applications,
+                MAX(json_extract(w.payload,'$.revisions[#-1].createdAt')) AS last_modeled_at
+                FROM products p LEFT JOIN releases r ON r.product_id=p.id
+                LEFT JOIN workspaces w ON w.release_id=r.id
+                GROUP BY p.id ORDER BY p.name_key''')]
 
     def product(self, identifier):
-        with self.connect() as db:
+        with self.read_snapshot() as db:
             product = self.require(db, 'products', identifier)
             product['releases'] = [dict(r) for r in db.execute(
                 _RELEASE_SUMMARY + ' WHERE r.product_id=? GROUP BY r.id ORDER BY r.name_key DESC', (identifier,))]
@@ -128,7 +160,7 @@ class ProductStore:
             return self.require(db, 'products', identifier)
 
     def release(self, identifier):
-        with self.connect() as db:
+        with self.read_snapshot() as db:
             release = self.require(db, 'releases', identifier)
             release['workspaces'] = [dict(r) for r in db.execute('''
                 SELECT w.id,w.release_id,w.application_id,w.environment,w.version,w.updated,
@@ -138,7 +170,7 @@ class ProductStore:
                     COALESCE(json_array_length(w.payload,'$.revisions'),0) AS revisions,
                     json_extract(w.payload,'$.revisions[#-1].createdAt') AS last_modeled_at
                 FROM workspaces w LEFT JOIN applications a ON a.id=w.application_id
-                WHERE w.release_id=? ORDER BY w.updated DESC LIMIT 200
+                WHERE w.release_id=? ORDER BY w.updated DESC,w.id
             ''', (identifier,))]
             return release
 
@@ -161,8 +193,115 @@ class ProductStore:
             return self.require(db, 'applications', identifier)
 
     def workspace(self, identifier):
-        with self.connect() as db:
+        with self.read_snapshot() as db:
             return self.unpack(self.require(db, 'workspaces', identifier))
+
+    def comparison_catalog(self, product_id):
+        """Read compact revision metadata in one query, without loading report bodies."""
+        with self.read_snapshot() as db:
+            product = self.require(db, 'products', product_id)
+            rows = [dict(row) for row in db.execute('''
+                SELECT w.id,w.release_id,w.application_id,w.environment,a.name AS application_name,
+                    json_extract(w.payload,'$.projectName') AS name,
+                    COALESCE(json_array_length(w.payload,'$.revisions'),0) AS revision_count,
+                    COALESCE((SELECT json_group_array(json_object('number',json_extract(j.value,'$.number'),
+                        'created_at',json_extract(j.value,'$.createdAt')))
+                        FROM json_each(w.payload,'$.revisions') j),'[]') AS revision_options
+                FROM workspaces w JOIN releases r ON r.id=w.release_id LEFT JOIN applications a ON a.id=w.application_id
+                WHERE r.product_id=? ORDER BY a.name,w.environment,w.id
+            ''', (product_id,))]
+            for row in rows:
+                row['revisions'] = json.loads(row.pop('revision_options'))
+            return {'product': product, 'releases': [dict(r) for r in db.execute(
+                'SELECT * FROM releases WHERE product_id=? ORDER BY created_at DESC,name_key DESC', (product_id,))], 'models': rows}
+
+    def comparison_snapshots(self, selections):
+        """Read both sides under one transaction so annotations cannot change halfway."""
+        with self.read_snapshot() as db:
+            tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            result = []
+            for selection in selections:
+                row = self.unpack(self.require(db, 'workspaces', selection['workspace_id']))
+                release = self.require(db, 'releases', row['release_id'])
+                revision = next((r for r in row['workspace'].get('revisions', []) if r['number'] == selection['revision']), None)
+                if revision is None:
+                    raise LookupError('Report revision not found')
+                revision = deepcopy(revision)
+                annotations = deepcopy(row['workspace'].get('reviewAnnotations', {}).get(
+                    f"workspace:{row['id']}:revision:{revision['number']}", revision.get('annotations', {})))
+                report_id = (revision.get('data', {}).get('engine_status') or {}).get('assessment', {}).get('report_id')
+                source = 'legacy_workspace_snapshot'
+                if report_id:
+                    report = db.execute('SELECT assessment_id,body FROM assessment_results WHERE id=?', (report_id,)).fetchone() if 'assessment_results' in tables else None
+                    if not report or report['assessment_id'] != row['id']:
+                        raise ValueError('Report is not bound to the selected workspace.')
+                    revision['data'] = json.loads(report['body'])
+                    source = 'authoritative_assessment_result'
+                    if 'finding_review_events' in tables:
+                        from .security_workflows import effective_workflow_review
+                        fields = {'owners': 'owner', 'notes': 'remarks', 'reviewStates': 'status',
+                            'dueDates': 'target_date', 'verification': 'verification_evidence',
+                            'acceptanceExpiry': 'acceptance_expires_at'}
+                        for event in db.execute('''SELECT e.* FROM finding_review_events e WHERE e.report_id=?
+                            AND e.id=(SELECT MAX(last.id) FROM finding_review_events last
+                                WHERE last.report_id=e.report_id AND last.finding_id=e.finding_id)''', (report_id,)):
+                            decision = json.loads(event['body'])
+                            if decision.get('security_workflow'):
+                                decision = effective_workflow_review(decision)
+                            for field, key in fields.items():
+                                annotations.setdefault(field, {})[event['finding_id']] = decision.get(key)
+                result.append({'workspace_id': row['id'], 'release_id': row['release_id'], 'product_id': release['product_id'], 'application_id': row['application_id'],
+                    'environment': row['environment'], 'name': row['workspace'].get('projectName'), 'revision': revision,
+                    'annotations': annotations, 'report_source': source})
+            return result
+
+    def save_comparison(self, product_id, name, request, result, actor):
+        name, _ = normalize_name(name)
+        if len(json.dumps(result).encode()) > 64_000_000:
+            raise ValueError('Comparison exceeds the 64 MB storage limit. Compare fewer application scopes.')
+        identifier, now = str(uuid.uuid4()), time.time()
+        with self.connect() as db:
+            self.require(db, 'products', product_id)
+            db.execute('INSERT INTO comparisons VALUES(?,?,?,?,?,?,?,?,?,?)',
+                (identifier, product_id, name, json.dumps(request), json.dumps(result), '{}', 1, actor, now, now))
+            self.audit(db, actor, 'save_comparison', identifier)
+        return self.comparison(identifier)
+
+    def comparison(self, identifier):
+        with self.read_snapshot() as db:
+            row = self.require(db, 'comparisons', identifier)
+            row['result'] = json.loads(row.pop('payload'))
+            row['request'] = json.loads(row['request'])
+            row['review'] = json.loads(row['review'])
+            return row
+
+    def list_comparisons(self, product_id, offset=0, limit=30):
+        with self.read_snapshot() as db:
+            self.require(db, 'products', product_id)
+            rows = db.execute('SELECT id,name,actor,created,updated,version FROM comparisons WHERE product_id=? ORDER BY created DESC,id LIMIT ? OFFSET ?',
+                              (product_id, limit + 1, offset)).fetchall()
+            return {'items': [dict(row) for row in rows[:limit]], 'next_offset': offset + limit if len(rows) > limit else None}
+
+    def review_comparison(self, identifier, change_id, review, expected_version, actor):
+        if review.get('status') not in {'pending_review', 'acknowledged', 'accepted_risk', 'verified_fixed', 'needs_investigation'}:
+            raise ValueError('Unsupported comparison review status.')
+        if len(review.get('remarks', '').strip()) < 3:
+            raise ValueError('Review remarks are required.')
+        with self.connect() as db:
+            row = self.require(db, 'comparisons', identifier)
+            if row['version'] != expected_version:
+                raise StoreConflict('This comparison was reviewed elsewhere. Reload it before saving.')
+            changes = json.loads(row['payload']).get('changes', [])
+            change = next((c for c in changes if c['id'] == change_id), None)
+            if not change:
+                raise LookupError('Comparison change not found')
+            if review['status'] == 'verified_fixed' and (change['kind'] != 'finding' or not review.get('evidence', '').strip()):
+                raise ValueError('Verified fixed requires a finding and verification evidence.')
+            reviews = json.loads(row['review'])
+            reviews[change_id] = {**review, 'reviewer': actor, 'reviewed_at': time.time()}
+            db.execute('UPDATE comparisons SET review=?,version=version+1,updated=? WHERE id=?', (json.dumps(reviews), time.time(), identifier))
+            self.audit(db, actor, 'review_comparison', identifier)
+        return self.comparison(identifier)
 
     @staticmethod
     def unpack(row):
@@ -223,8 +362,10 @@ class ProductStore:
                 workspace.pop('activeJob', None)
                 draft = workspace.setdefault('draft', {})
                 draft.update({'preview': None, 'preparedSignature': None})
-                draft.setdefault('payload', {}).update({'deployment_version': name, 'answers': []})
+                draft.setdefault('payload', {}).update({'deployment_version': name, 'answers': [],
+                    'assessment_id': workspace['id'], 'questionnaire_answers': [], 'generate_dfd': False})
                 db.execute('INSERT INTO workspaces VALUES(?,?,?,?,?,?,?)', (workspace['id'], target, row['application_id'], row['environment'], 1, json.dumps(workspace), time.time()))
+                db.execute('INSERT INTO assessment_lineage VALUES(?,?,?)', (workspace['id'], row['id'], time.time()))
             self.audit(db, actor, 'clone_release', target)
             return self.require(db, 'releases', target)
 

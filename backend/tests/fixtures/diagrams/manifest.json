@@ -1,0 +1,5 @@
+[
+  {"file":"payments.drawio", "components":["Customer", "Payment API", "PostgreSQL", "Stripe"], "flows":[["Customer", "Payment API"], ["Payment API", "PostgreSQL"], ["Payment API", "Stripe"], ["Stripe", "Payment API"]], "boundaries":["Application trust boundary"]},
+  {"file":"repeated-services.drawio", "components":["Orders API", "Orders API", "Redis"], "flows":[["Orders API", "Redis"]], "boundaries":["Tenant A trust boundary", "Tenant B trust boundary"], "instances":{"0:a":"tenant-a-api", "0:b":"tenant-b-api", "0:cache":"tenant-a-cache"}, "instance_flows":[["tenant-a-api", "tenant-a-cache"]], "boundary_membership":{"Tenant A trust boundary":["tenant-a-api", "tenant-a-cache"], "Tenant B trust boundary":["tenant-b-api"]}},
+  {"file":"dependencies.mmd", "components":["React", "Orders API", "PostgreSQL"], "flows":[["React", "Orders API"], ["Orders API", "PostgreSQL"]], "boundaries":[]}
+]

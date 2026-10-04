@@ -16,7 +16,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ..models import Component, DataFlow, SystemArchitecture
+from ..models import Component, DataFlow, SystemArchitecture, TrustBoundary
 from ..engine.parser import ArchitectureParser
 from ..engine.canonical_model import canonicalize_architecture
 from ..engine.control_contracts import presence
@@ -92,6 +92,14 @@ class ReviewAnswer(BaseModel):
         return self
 
 
+class DiagramDecision(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    task_id: str = Field(min_length=1, max_length=100)
+    artifact_hash: str = Field(min_length=1, max_length=64)
+    action: Literal['confirm', 'exclude', 'reverse', 'dependency', 'forward_flow', 'reverse_flow']
+    note: str = Field(min_length=3, max_length=2000)
+
+
 class ModelReviewRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
     project_name: str = Field(min_length=1, max_length=200)
@@ -106,11 +114,23 @@ class ModelReviewRequest(BaseModel):
     environment: str = Field(default='', max_length=100)
     deployment_version: str = Field(default='', max_length=100)
     workflows: list[dict] = Field(default_factory=list, max_length=100)
+    assessment_id: str = Field(default='', max_length=100, pattern=r'^[a-zA-Z0-9_:-]*$')
+    application_types: list[Literal['ui', 'frontend', 'backend', 'web', 'mobile', 'api', 'other']] = Field(default_factory=list, max_length=7)
+    other_application_type: str = Field(default='', max_length=200)
+    questionnaire_answers: list[dict] = Field(default_factory=list, max_length=2000)
+    generate_dfd: bool = False
+    diagram_layout: dict[str, dict[str, float]] = Field(default_factory=dict, max_length=1000)
+    diagram_decisions: list[DiagramDecision] = Field(default_factory=list, max_length=3000)
 
     @model_validator(mode='after')
     def bound_input(self):
+        import math
+        if any(set(point) != {'x', 'y'} or any(not math.isfinite(value) or abs(value) > 100000 for value in point.values()) for point in self.diagram_layout.values()):
+            raise ValueError('Diagram positions require finite, bounded x and y coordinates.')
         if len({source.id for source in self.sources}) != len(self.sources):
             raise ValueError('Source IDs must be unique.')
+        if len({d.task_id for d in self.diagram_decisions}) != len(self.diagram_decisions):
+            raise ValueError('Diagram decisions must have unique question IDs.')
         if len({source.name for source in self.sources if source.included}) != sum(s.included for s in self.sources):
             raise ValueError('Included sources must have unique names; replace an existing file or rename the new source.')
         if sum(len(source.text) for source in self.sources) > 1000000 or len(json.dumps(self.model_dump())) > 2000000:
@@ -121,7 +141,7 @@ class ModelReviewRequest(BaseModel):
 
 
 COMPONENT_FIELDS = {'name', 'type', 'trust_level', 'description', 'data_sensitivity', 'cloud_account', 'tenant_id', 'environment', 'aliases'}
-FLOW_FIELDS = {'source_id', 'target_id', 'protocol', 'data_type', 'assumed'}
+FLOW_FIELDS = {'source_id', 'target_id', 'protocol', 'data_type', 'assumed', 'description'}
 STRING_CONTROLS = {'auth_type', 'data_sensitivity', 'protocol'}
 CONTROL_OPTIONS = {
     'auth_type': ['OAuth2/OIDC', 'JWT', 'mTLS', 'session cookie', 'API key'],
@@ -134,7 +154,7 @@ EXTRA_CONTROLS = {'authorization', 'rbac_enabled', 'abac_enabled', 'authenticate
 
 
 def flow_id(flow):
-    return (flow.properties or {}).get('review_id') or 'flow:' + digest([flow.source_id, flow.target_id, flow.protocol, flow.data_type])[:20]
+    return flow.id or (flow.properties or {}).get('review_id') or 'flow:' + digest([flow.source_id, flow.target_id, flow.protocol, flow.data_type] + ([flow.description] if flow.description else []))[:20]
 
 
 def _source_bundle(payload):
@@ -149,7 +169,7 @@ def _source_bundle(payload):
         documents.append(metadata)
         # Prior reports remain references, never declarations of deployed technology.
         role = metadata.get('role', 'source_design')
-        if role != 'reference_report':
+        if role != 'reference_report' and not metadata.get('diagram_model'):
             bodies.append(f'Document: {source.name}\nType: {source.kind}\nRole: {role}\nContent:\n{source.text}')
     return '\n\n---\n\n'.join(bodies), documents
 
@@ -163,10 +183,23 @@ def _record(statement, **extra):
 def _apply_edits(architecture, edits, warnings):
     components = {c.id: c for c in architecture.components}
     excluded = {}
+    seen_flows = {}
     for flow in architecture.flows:
-        flow.properties['review_id'] = flow_id(flow)
+        identifier = flow_id(flow)
+        occurrence = seen_flows.get(identifier, 0)
+        if occurrence and flow.id:
+            raise ValueError('Flow IDs must be unique.')
+        seen_flows[identifier] = occurrence + 1
+        flow.id = identifier + (f':parallel-{occurrence}' if occurrence else '')
+        flow.properties['review_id'] = flow.id
     flows = {flow_id(f): f for f in architecture.flows}
-    for edit in sorted(edits, key=lambda item: item.field not in {'add_component', 'add_flow'}):
+    boundaries = {}
+    for boundary in architecture.trust_boundaries:
+        boundary.id = boundary.id or 'boundary:' + digest([boundary.name, boundary.boundary_type])[:20]
+        if boundary.id in boundaries:
+            raise ValueError('Boundary IDs must be unique.')
+        boundaries[boundary.id] = boundary
+    for edit in sorted(edits, key=lambda item: item.field not in {'add_component', 'add_flow', 'add_boundary'}):
         evidence = _record(edit.reason, property=edit.field)
         if edit.field == 'add_component':
             component = Component.model_validate(edit.value)
@@ -176,12 +209,81 @@ def _apply_edits(architecture, edits, warnings):
             component.properties = {**component.properties, 'authoritative': True, 'reviewer_declared': True}
             components[component.id] = component
         elif edit.field == 'add_flow':
+            if edit.element_id in flows:
+                raise ValueError('A new flow needs a unique ID.')
             flow = DataFlow.model_validate(edit.value)
+            flow.id = edit.element_id
             flow.evidence = [evidence]
             flow.properties = {**flow.properties, 'assumed': flow.assumed, 'reviewer_declared': True, 'review_id': edit.element_id}
             flows[edit.element_id] = flow
+        elif edit.field == 'add_boundary':
+            if edit.element_id in boundaries:
+                raise ValueError('A new boundary needs a unique ID.')
+            boundary = TrustBoundary.model_validate(edit.value)
+            if any(cid not in components for cid in boundary.components):
+                raise ValueError('Boundary members must name included components.')
+            boundary.id = edit.element_id
+            boundary.evidence = [evidence]
+            boundaries[boundary.id] = boundary
+        elif edit.element_id in boundaries:
+            target = boundaries[edit.element_id]
+            if edit.field == 'remove':
+                boundaries.pop(edit.element_id)
+                for child in boundaries.values():
+                    if child.parent_id == edit.element_id:
+                        child.parent_id = None
+                continue
+            if edit.field == 'components':
+                if not isinstance(edit.value, list) or any(not isinstance(cid, str) or cid not in components for cid in edit.value):
+                    raise ValueError('Boundary members must name included components.')
+                target.components = list(dict.fromkeys(edit.value))
+            elif edit.field == 'parent_id':
+                if edit.value is not None and edit.value not in boundaries:
+                    raise ValueError('The parent boundary does not exist.')
+                target.parent_id = edit.value
+            elif edit.field in {'name', 'boundary_type', 'description'} and isinstance(edit.value, str) and (edit.field == 'description' or edit.value.strip()):
+                setattr(target, edit.field, edit.value.strip())
+            else:
+                raise ValueError('Invalid boundary correction.')
+            target.evidence.append(evidence)
         elif edit.element_id in components:
             target = components[edit.element_id]
+            if edit.field == 'merge_into':
+                if not isinstance(edit.value, str) or edit.value not in components or edit.value == target.id:
+                    raise ValueError('Merge target must be a different included component.')
+                survivor = components[edit.value]
+                survivor.evidence.extend(target.evidence)
+                survivor.evidence.append(evidence)
+                controls = set(CONTROL_TERMS) | EXTRA_CONTROLS | STRING_CONTROLS
+                for key, value in target.properties.items():
+                    if key not in survivor.properties:
+                        survivor.properties[key] = deepcopy(value)
+                    elif isinstance(value, list) and isinstance(survivor.properties[key], list):
+                        survivor.properties[key] = list({json.dumps(item, sort_keys=True, default=str): item
+                            for item in [*survivor.properties[key], *value]}.values())
+                    elif key in controls and survivor.properties[key] != value:
+                        survivor.properties.setdefault('control_assertions', {})[key] = 'conflicting'
+                        survivor.properties[key] = None
+                        warnings.append({'type': 'merge_control_conflict', 'message': f'Merged sources disagree about {key} on {survivor.name}; resolve the original evidence.'})
+                survivor.properties['aliases'] = list(dict.fromkeys([*survivor.properties.get('aliases', []), target.name, target.id]))
+                survivor.properties['authoritative'] = True
+                for flow in flows.values():
+                    if flow.source_id == target.id:
+                        flow.source_id = survivor.id
+                    if flow.target_id == target.id:
+                        flow.target_id = survivor.id
+                for boundary in boundaries.values():
+                    boundary.components = list(dict.fromkeys(survivor.id if cid == target.id else cid for cid in boundary.components))
+                for asset in architecture.assets:
+                    if asset.related_component_id == target.id:
+                        asset.related_component_id = survivor.id
+                for key in ('iac_findings', 'security_findings'):
+                    for finding in architecture.metadata.get(key, []):
+                        if finding.get('resource_id') == target.id:
+                            finding['resource_id'] = survivor.id
+                architecture.metadata.setdefault('component_lineage', []).append({'predecessor_id': target.id, 'successor_id': survivor.id, 'reason': edit.reason})
+                components.pop(target.id)
+                continue
             if edit.field == 'remove':
                 components.pop(edit.element_id)
                 excluded[edit.element_id] = edit.reason
@@ -206,7 +308,7 @@ def _apply_edits(architecture, edits, warnings):
                 raise ValueError(f'Invalid flow correction: {edit.field}.')
             if edit.field == 'assumed' and not isinstance(edit.value, bool):
                 raise ValueError('Flow assumption must be a boolean.')
-            if edit.field != 'assumed' and (not isinstance(edit.value, str) or not edit.value.strip()):
+            if edit.field != 'assumed' and (not isinstance(edit.value, str) or (edit.field != 'description' and not edit.value.strip())):
                 raise ValueError('Flow corrections need a nonempty value.')
             if edit.field in {'source_id', 'target_id'} and edit.value not in components:
                 raise ValueError('A corrected flow endpoint must name an included component.')
@@ -222,7 +324,15 @@ def _apply_edits(architecture, edits, warnings):
             architecture.flows.append(flow)
         else:
             warnings.append({'type': 'removed_flow', 'message': f'Flow {flow.source_id} -> {flow.target_id} was excluded because an endpoint is absent.'})
+    architecture.trust_boundaries = list(boundaries.values())
     for boundary in architecture.trust_boundaries:
+        seen = {boundary.id}
+        parent = boundary.parent_id
+        while parent:
+            if parent in seen or parent not in boundaries:
+                raise ValueError('Boundary containment must be acyclic and reference existing boundaries.')
+            seen.add(parent)
+            parent = boundaries[parent].parent_id
         boundary.components = [item for item in boundary.components if item in components]
     architecture.assets = [a for a in architecture.assets if not a.related_component_id or a.related_component_id in components]
     metadata = architecture.metadata or {}
@@ -264,7 +374,9 @@ def _apply_answers(architecture, payload, source_digest, warnings, dependencies=
             raise ValueError(f'Unsupported review control: {answer.control}.')
         if isinstance(target, DataFlow) and answer.control in {'transport_encryption', 'encryption_in_transit'}:
             raise ValueError('Specify the flow protocol; transport encryption is derived by the coverage engine.')
-        record = _record(answer.note or 'The owner does not know this control state.',
+        statement = f'{target.name if isinstance(target, Component) else target.id}: {answer.control} is {answer.state}.'
+        record = _record(statement + (f' {answer.note}' if answer.note else ''),
+            control=answer.control, element_id=answer.element_id, evidence_scope='control',
             state=answer.state, reviewer=answer.reviewer, answered_at=answer.answered_at,
             source_ids=answer.source_ids, source_digest=source_digest)
         target.properties.setdefault('review_answers', {})[answer.control] = record
@@ -309,8 +421,9 @@ def _apply_answers(architecture, payload, source_digest, warnings, dependencies=
 
 
 def _questions(architecture, coverage, dependencies=None):
+    from ..engine.stride_coverage_engine import coverage_flows
     components = {c.id: c for c in architecture.components}
-    flows = {f'flow:{f.source_id}->{f.target_id}': f for f in architecture.flows}
+    flows = dict(coverage_flows(architecture))
     grouped = {}
     for cell in coverage['cells']:
         if cell['element_kind'] not in {'component', 'flow'}:
@@ -342,14 +455,15 @@ def _questions(architecture, coverage, dependencies=None):
     return sorted(grouped.values(), key=lambda q: (q['answer'] is not None, q['priority'] != 'High', -importance.get(q['control'], 1), -len(q['categories']), q['id']))
 
 
-def prepare_model(payload: ModelReviewRequest):
+def prepare_model(payload: ModelReviewRequest, *, render=True):
     text, documents = _source_bundle(payload)
     parse_cache_hit = False
-    if not text.strip() and payload.baseline is None:
+    warnings = []
+    if not text.strip() and payload.baseline is None and not any(s.included and s.metadata.get('diagram_model') for s in payload.sources):
         raise ValueError('Include architecture text or a readable design file before reviewing the model.')
     if payload.input_kind == 'iac' and text.strip():
         from ..engine.iac_parser import IaCParser
-        active = [s for s in payload.sources if s.included and s.metadata.get('role') != 'reference_report']
+        active = [s for s in payload.sources if s.included and s.metadata.get('role') != 'reference_report' and not s.metadata.get('diagram_model')]
         context = [s for s in active if s.kind.lower() in {'text', 'txt', 'md', 'pdf', 'docx', 'csv'}]
         code = [s for s in active if s not in context]
         context_text, _ = _source_bundle(payload.model_copy(update={'sources': context}))
@@ -363,25 +477,37 @@ def prepare_model(payload: ModelReviewRequest):
             architecture.components = list(components.values())
             architecture.metadata = {**(architecture.metadata or {}), **(iac.metadata or {}), 'iac_findings': findings}
     else:
-        architecture, parse_cache_hit = _parse_text(text) if text.strip() else (SystemArchitecture(components=[], flows=[]), False)
-    warnings = []
+        prose_sources = [s for s in payload.sources if not s.metadata.get('diagram_model')]
+        prose_text, _ = _source_bundle(payload.model_copy(update={'sources': prose_sources}))
+        architecture, parse_cache_hit = _parse_text(prose_text) if prose_text.strip() else (SystemArchitecture(components=[], flows=[]), False)
+    from .diagram_review import import_sources, apply_decisions, align_snapshot
     if payload.baseline:
         # Legacy reports can be refined even when original uploads are unavailable.
         baseline = payload.baseline.model_copy(deep=True)
+        if any(s.included and s.metadata.get('diagram_model') for s in payload.sources):
+            align_snapshot(baseline, architecture)
         known = {c.id for c in baseline.components}
         baseline.components.extend(c for c in architecture.components if c.id not in known)
         paths = {flow_id(f) for f in baseline.flows}
         baseline.flows.extend(f for f in architecture.flows if flow_id(f) not in paths)
+        known_boundaries = {b.id for b in baseline.trust_boundaries}
+        baseline.trust_boundaries.extend(b for b in architecture.trust_boundaries if b.id not in known_boundaries)
+        baseline.metadata = baseline.metadata or {}
+        for key, value in (architecture.metadata or {}).items():
+            if key.startswith('diagram_'):
+                baseline.metadata[key] = deepcopy(value)
         for key in ('known_issues', 'iac_findings'):
             baseline.metadata = baseline.metadata or {}
             baseline.metadata[key] = [*(baseline.metadata.get(key) or []), *((architecture.metadata or {}).get(key) or [])]
         architecture = baseline
         warnings.append({'type': 'legacy_model', 'message': 'This review includes a saved model snapshot. Original files may be unavailable; it is not a fresh verification of those files.'})
+    import_sources(architecture, payload.sources, warnings)
     if len(architecture.components) > 1000 or len(architecture.flows) > 3000:
         raise ValueError('The parsed model exceeds the review size limit.')
     architecture.metadata = {**(architecture.metadata or {}), 'source_documents': documents or (architecture.metadata or {}).get('source_documents', []),
         'source_text': text or (architecture.metadata or {}).get('source_text', '')}
     _apply_edits(architecture, payload.edits, warnings)
+    apply_decisions(architecture, payload.diagram_decisions, warnings)
     if payload.workflows:
         from ..engine.workflow_checks import INVARIANTS
         ids = {c.id for c in architecture.components}
@@ -396,9 +522,11 @@ def prepare_model(payload: ModelReviewRequest):
                 if record.get('source_type') != 'reviewer_clarification' and record['statement'] not in text:
                     raise ValueError('Workflow evidence must quote an included source or identify a reviewer clarification.')
     architecture.metadata['workflows'] = deepcopy(payload.workflows)
+    architecture.metadata['diagram_layout'] = deepcopy(payload.diagram_layout)
     source_digest = digest({'sources': [s.model_dump() for s in payload.sources if s.included],
         'baseline': payload.baseline.model_dump() if payload.baseline else None,
-        'edits': [e.model_dump() for e in payload.edits], 'workflows': payload.workflows})
+        'edits': [e.model_dump() for e in payload.edits], 'workflows': payload.workflows,
+        'diagram_decisions': [d.model_dump() for d in payload.diagram_decisions]})
     for component in architecture.components:
         for key, value in [('environment', payload.environment), ('deployment_version', payload.deployment_version)]:
             if value and not component.properties.get(key):
@@ -428,10 +556,16 @@ def prepare_model(payload: ModelReviewRequest):
     if not architecture.components:
         warnings.append({'type': 'empty_model', 'message': 'No components were recognized. Add a component or correct the source before analysis.'})
     questions = _questions(architecture, coverage, dependencies)
+    diagram_questions = architecture.metadata.get('diagram_review_tasks', [])
+    pending_diagram = sum(q['status'] == 'pending' for q in diagram_questions)
+    if pending_diagram:
+        warnings.append({'type': 'diagram_review', 'message': f'{pending_diagram} diagram interpretations still need review. Unconfirmed visual flows remain assumed.'})
+    from ..engine.diagram_quality import diagram_quality
+    extraction = diagram_quality(architecture)
     readiness = {'components': len(architecture.components), 'stated_components': sum(c.properties.get('evidence_status') == 'explicit' for c in architecture.components),
         'flows': len(architecture.flows), 'assumed_flows': sum(f.assumed for f in architecture.flows),
         'open_questions': len(questions), 'warnings': len(warnings), 'status': 'preliminary' if questions or warnings else 'ready_for_review',
-        'is_security_score': False}
+        'is_security_score': False, 'diagram_quality': extraction}
     architecture.metadata['model_review'] = {'source_digest': source_digest, 'readiness': readiness,
         'answers': [a.model_dump() for a in payload.answers], 'edits': [e.model_dump() for e in payload.edits],
         'warnings': warnings, 'verification_status': 'not_runtime_verified'}
@@ -439,9 +573,9 @@ def prepare_model(payload: ModelReviewRequest):
         'source_digests': {source.id: digest(source.model_dump()) for source in payload.sources if source.included},
         'correlation': architecture.metadata.get('source_correlation', {}),
         'performance': {'parse_cache_hit': parse_cache_hit},
-        'questions': questions, 'readiness': readiness, 'warnings': warnings, 'validation': validation,
+        'questions': questions, 'diagram_questions': diagram_questions, 'readiness': readiness, 'warnings': warnings, 'validation': validation,
         'flows': [{**f.model_dump(), 'review_id': flow_id(f)} for f in architecture.flows],
         'diagram_bindings': {'nodes': [{'diagram_id': _sanitize_id(c.id), 'element_id': c.id} for c in architecture.components],
             'flows': [{'source': _sanitize_id(f.source_id), 'target': _sanitize_id(f.target_id), 'element_id': flow_id(f)} for f in architecture.flows]},
-        'diagram': render_view(architecture)['diagram'],
+        'diagram': render_view(architecture)['diagram'] if render else '',
         'prepared_at': datetime.now(timezone.utc).isoformat()}

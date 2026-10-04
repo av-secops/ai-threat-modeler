@@ -65,8 +65,23 @@ class IaCParser:
 
         try:
             detected_format = self.detect_format(iac_content, filename, format_hint)
+            if detected_format == 'dockerfile':
+                from .dockerfile_model import read_stages, literal_root_user
+                stages = read_stages(iac_content)
+                final = stages[-1]
+                architecture = SystemArchitecture(components=[Component(
+                    id=final['id'], name=f"Final image ({final['name']})", type='Container',
+                    properties={'iac_source': 'dockerfile', 'source_file': filename,
+                        'source_line': final['line'], 'base_image': final['base_image'],
+                        'runs_as_root': literal_root_user(final),
+                        'exposed_ports': final['exposed_ports'], 'publicly_accessible': None},
+                )], flows=[], metadata={'source': 'dockerfile', 'build_stages': stages,
+                    'analysis_limits': ['Only the final stage is treated as the default output image. Build targets, image metadata, RUN effects, ONBUILD triggers and deployment user overrides are not resolved.'],
+                })
+                return self._attach_security_findings(architecture, iac_content, 'dockerfile')
             if detected_format == 'terraform-plan':
-                return parse_plan(json.loads(iac_content), self.security_analyzer)
+                architecture = parse_plan(json.loads(iac_content), self.security_analyzer)
+                return self._attach_coverage(architecture, detected_format)
             if detected_format == 'terraform':
                 architecture = self._parse_terraform(iac_content)
                 return self._attach_security_findings(architecture, iac_content, 'terraform')
@@ -148,6 +163,8 @@ class IaCParser:
         path = Path(filename.lower()) if filename else None
         name = path.name if path else ''
         suffix = path.suffix if path else ''
+        if name == 'dockerfile' or name.startswith('dockerfile.') or suffix == '.dockerfile' or re.search(r'(?im)^\s*FROM\s+(?:--platform=\S+\s+)?\S+(?:\s+AS\s+[\w.-]+)?\s*$', content):
+            return 'dockerfile'
         if suffix in {'.tf', '.hcl', '.tfvars'} or cls._looks_like_terraform(content):
             return 'terraform'
         if suffix == '.bicep':
@@ -276,8 +293,11 @@ class IaCParser:
         finding_keys = set()
         unresolved_references = []
         analysis_limits = []
+        coverage_records = []
         for architecture in architectures:
             metadata = architecture.metadata or {}
+            if metadata.get('iac_coverage'):
+                coverage_records.append(metadata['iac_coverage'])
             sources.append(metadata.get('source', 'iac'))
             id_map: Dict[str, str] = {}
             for component in architecture.components:
@@ -327,6 +347,8 @@ class IaCParser:
                 'iac_findings_count': len(findings),
                 'unresolved_references': unresolved_references,
                 'analysis_limits': analysis_limits,
+                'iac_coverage': {'format': 'iac-project', 'status': 'partial', 'artifacts': coverage_records,
+                    'runtime_verified': False, 'executes_uploaded_code': False},
                 'original_text': f'IaC project containing {len(filenames)} related files.',
             },
         )
@@ -342,6 +364,12 @@ class IaCParser:
         metadata['iac_findings'] = self.security_analyzer.analyze(iac_content, format_hint, documents)
         metadata['iac_findings_count'] = len(metadata['iac_findings'])
         architecture.metadata = metadata
+        return self._attach_coverage(architecture, format_hint)
+
+    @staticmethod
+    def _attach_coverage(architecture, format_hint):
+        from .iac_support import coverage
+        architecture.metadata = {**(architecture.metadata or {}), 'iac_coverage': coverage(architecture, format_hint)}
         return architecture
 
     def _parse_terraform(self, content: str) -> SystemArchitecture:
@@ -439,14 +467,14 @@ class IaCParser:
                         source_id=source_id,
                         target_id=target_id,
                         protocol=protocol,
-                        assumed=False,
+                        assumed=True,
                         properties={
                             'origin': 'iac_reference',
-                            'authoritative': True,
+                            'authoritative': False,
                             'relationship': relationship,
                             'evidence': f'Terraform expression in {source_id} references {target_id}.',
                         },
-                        confidence='High',
+                        confidence='Medium',
                     ))
                     flow_pairs.add((source_id, target_id))
 

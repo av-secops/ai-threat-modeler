@@ -3,12 +3,18 @@
 # Model weights are not installed by pip; see tools/prefetch_models.py.
 # Product workspaces and durable jobs use sqlite3 and concurrent.futures from
 # Python's standard library; no separate database driver or queue is required.
+# AWS discovery is opt-in (requirements-cloud.txt); GPU adapter training uses
+# requirements-training.txt. Neither is required for offline threat modeling.
 
 # Web framework
 fastapi>=0.115.0,<1.0.0
 uvicorn[standard]>=0.34.0,<1.0.0
 python-multipart>=0.0.9,<1.0.0
 python-dotenv>=1.0.0,<2.0.0
+# Verified enterprise JWT identities and pinned interchange schema validation.
+PyJWT[crypto]>=2.10.1,<3.0.0
+jsonschema>=4.23.0,<5.0.0
+anyio>=4.0.0,<5.0.0
 
 # Core analysis and modeling
 networkx>=3.4.0,<4.0.0
@@ -16,12 +22,16 @@ pydantic>=2.6.0,<3.0.0
 numpy>=1.26.0,<3.0.0
 pyyaml>=6.0.1,<7.0.0
 pypdf>=5.5.0,<6.0.0
+defusedxml>=0.7.1,<1.0.0
 python-docx>=1.1.2,<2.0.0
 python-hcl2>=7.3.1,<8.0.0
+dockerfile-parse>=2.0.1,<3.0.0
 PyMuPDF>=1.24.0,<2.0.0
 pytesseract>=0.3.13,<1.0.0
 Pillow>=10.0.0,<13.0.0
 rapidocr-onnxruntime>=1.4.4,<2.0.0
+# Used directly for bounded diagram connector geometry (also required by RapidOCR).
+opencv-python>=4.8.0,<5.0.0
 packaging>=24.0,<27.0
 
 # NLP and local model runtime
@@ -45,6 +55,8 @@ multiprocess==0.70.17
 openai>=1.0.0,<2.0.0
 anthropic>=0.18.0,<1.0.0
 requests>=2.31.0,<3.0.0
+# Direct dependency of the bounded, certificate-verifying Jira adapter.
+urllib3>=2.2.0,<3.0.0
 
 # Testing.
 # Kept here for compatibility with existing Docker and local evaluation workflows.

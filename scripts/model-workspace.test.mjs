@@ -1,9 +1,33 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { revisionDiff, carryAnnotations, commitRevision, applyPreparedPreview, draftSignature } from '../src/utils/modelWorkspace.js';
+import { revisionDiff, carryAnnotations, commitRevision, applyPreparedPreview, draftSignature, newWorkspace, upgradeWorkspaceDraft } from '../src/utils/modelWorkspace.js';
 
 const data = { score: 70, architecture: { components: [{ id: 'api', name: 'API' }] },
   threats: [{ id: 'T1', title: 'Risk', severity: 'High', tier: 'Confirmed', affected_components: ['api'] }] };
+
+test('new assessments have their own scope and cannot inherit questionnaire completion', () => {
+  const workspace = newWorkspace('Mixed product', { application_types: ['web', 'api'], domain_profile: 'healthcare',
+    assessment_id: 'old', generate_dfd: true, questionnaire_answers: [{ question_id: 'old-answer' }] });
+  assert.equal(workspace.draft.payload.assessment_id, workspace.id);
+  assert.notEqual(workspace.id, 'old');
+  assert.deepEqual(workspace.draft.payload.application_types, ['web', 'api']);
+  assert.equal(workspace.draft.payload.domain_profile, 'healthcare');
+  assert.equal(workspace.draft.payload.generate_dfd, false);
+  assert.deepEqual(workspace.draft.payload.questionnaire_answers, []);
+});
+
+test('legacy upgrades preserve reports and domains without inventing questionnaire evidence', () => {
+  const original = { id: 'legacy', schemaVersion: 1, revisions: [data], draft: { preparedSignature: 'old', payload: { domain_profile: 'healthcare', answers: [{ state: 'absent' }] } } };
+  const updated = upgradeWorkspaceDraft(original);
+  assert.equal(updated.schemaVersion, 2);
+  assert.equal(updated.revisions, original.revisions);
+  assert.equal(updated.draft.payload.domain_profile, 'healthcare');
+  assert.equal(updated.draft.payload.assessment_id, 'legacy');
+  assert.deepEqual(updated.draft.payload.application_types, []);
+  assert.equal(updated.draft.preparedSignature, null);
+  assert.equal(original.schemaVersion, 1);
+  assert.equal(upgradeWorkspaceDraft(updated), updated);
+});
 
 test('previews update only the matching draft, preserving sources and revisions', () => {
   const payload = { edits: [{ element_id: 'service', field: 'add_component' }], sources: [{ text: 'Design' }] };

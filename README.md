@@ -18,6 +18,38 @@ published as confirmed, business-workflow controls, clearer assurance views and
 durable local analysis jobs. See the [release notes](docs/releases/v2.3.2.md) for
 details and the limits of these checks.
 
+The assessment flow now starts with **Select Application Type**, document or
+diagram uploads, and a versioned security questionnaire. Shared-control questions
+are grouped, cited answers can be confirmed together, and cloned releases propose
+unchanged answers for review. Complete required
+answers (Unknown is allowed with a reason), generate and edit the numbered DFD,
+then analyze it. The risk register records Pending Review, team remarks and flow
+references. **Security Reports** also holds imported scanner and assessment
+reports. See [assessment workflow and setup](docs/assessment-workflow.md).
+
+The chart icon on a product opens its security dashboard: risk severity, review
+status, application/release coverage, and a filterable register. Findings open
+their original evidence and review history. Counts use the latest saved report
+per model, so reruns do not inflate totals; accepted risks are not counted as
+fixes. The Products screen also has a portfolio overview. See
+[dashboard scope and counting rules](docs/product-security-dashboard.md).
+
+Release comparison now matches explicit saved revisions and shows changes to
+components, flows, boundaries and risks, with reviewer mappings and saved decisions.
+Risk acceptance has an owner and expiry; verified closure records a test or review,
+its evidence and acceptance criteria. Governed KB publishing, reviewed-holdout
+evaluation, scoped access, model interchange and optional cloud/ticket connectors
+are described in the [release notes](docs/releases/v2.3.2.md) and the guides below.
+Connectors are opt-in; installing the app does not contact your cloud or Jira.
+
+| Guide | What it covers |
+| --- | --- |
+| [Workspace access](docs/workspace-access.md) | OIDC bearer tokens, product grants and deployment boundaries |
+| [Knowledge governance](docs/knowledge-governance.md) | Rule checks, reviewed evaluation, approval, publication and rollback |
+| [Security workflows](docs/security-workflows.md) | Organization patterns, risk acceptance, verification and Jira integration |
+| [Model as code](docs/model-as-code.md) | CLI/CI gates, OTM and Threat Dragon interchange, read-only AWS snapshots |
+| [Reasoning contracts](docs/reasoning-controls.md) | Control effectiveness, conditional attack paths and evidence uncertainty |
+
 ## What it does
 
 - Parses components, assets, data flows, trust boundaries, assumptions, and known issues from text, Markdown, DOCX, PDF, JSON, YAML, and related text formats.
@@ -31,19 +63,21 @@ details and the limits of these checks.
 - Organizes server-saved threat models by product and release, with separate application models, unique names, draft recovery and revision comparison.
 - Tracks declared issues back to source evidence, checks explicit business-workflow controls and preserves uncertainty in cloud-policy evaluation.
 
-The report has separate overview, architecture, risk register and assurance
+The report has separate overview, architecture, risk register and Security Reports
 views. Findings can be searched and filtered by evidence, severity, STRIDE and
 review status; each opens a detail dialog with evidence and remediation. The
 architecture supports wheel zoom, buttons and panning in light and dark mode.
 
-Architecture and IaC analyses now open a review draft first. Check the components
-and connections, answer the priority questions you know, then analyze the reviewed
-model. You can leave unknowns open and return to them later.
+Architecture and IaC analyses open a review draft first. Check the preliminary
+inventory and complete the applicable questionnaire before generating the DFD.
+You can record Unknown with a reason and return to it later. Additional
+post-DFD clarifications are separate from this completion gate.
 
 Use **Update this model** to add context, replace a file or correct a connection.
 Each successful analysis saves a new report revision. History also restores
-unfinished drafts. Unassigned sources remain in this browser; product workspaces
-also save extracted text and immutable reports on the server. See
+unfinished drafts. Unassigned drafts remain in this browser; questionnaire evidence,
+review history and governed reports are saved on the server too. Product workspaces
+also save their source drafts on the server. See
 [product workspaces](docs/product-workspaces.md) for storage and role setup. Use
 **Export workspace** for a JSON archive. Details are in
 [the guided review notes](docs/guided-model-review.md).
@@ -227,12 +261,12 @@ near-identical questions about whichever element happened to rank highest. The
 cap is reported in the coverage `guarantee`, and every cell left out is still
 listed in the evidence requests.
 
-An attack path is published only when the validated graph contains a credible
-entry, target, at least one hop, and at least one explicitly stated hop. Each hop
-is marked `explicit` or `inferred`, cites its evidence, and records trust-boundary
-crossings, effective identity, required permissions, authorization transition,
-and network protocol. Inferred hops are also listed as assumptions. An isolated finding remains an exploit scenario; its explanation says
-why no path was modeled instead of drawing a zero-hop path.
+An evidence-backed attack path needs stated connectivity between a credible entry
+and its target. Routes with inferred hops are kept separately as hypotheses.
+Each hop records its evidence, trust-boundary crossings, identity and permission
+prerequisites. Unknown authorization remains unknown; a connection alone does
+not prove an exploit is possible. An isolated finding remains an exploit scenario
+with an explanation of why no path was modeled.
 
 The system security score groups duplicate manifestations of the same root
 control gap before calculating impact. `technical-v4` reports the confirmed-risk
@@ -290,6 +324,11 @@ pip install -r requirements.txt
 npm ci
 ```
 
+The root requirements file delegates to `backend/requirements.txt`. Optional
+read-only AWS discovery needs `pip install -r backend/requirements-cloud.txt`;
+offline architecture and IaC analysis do not need the AWS SDK or credentials.
+GPU adapter training uses `backend/requirements-training.txt` separately.
+
 Start the frontend and backend together:
 
 ```bash
@@ -325,6 +364,9 @@ from Git. No model weights are downloaded during normal startup.
 
 The helper scripts are local-only. Before any deliberate network deployment,
 set `ENVIRONMENT=production`, a narrow `ALLOWED_ORIGINS`, and `ADMIN_API_TOKEN`.
+Configure verified workspace identities and explicit product grants as described
+in [workspace access](docs/workspace-access.md); `ADMIN_API_TOKEN` alone does not
+authenticate product users. Back up the SQLite database before upgrading.
 Use a trusted network and an authenticated TLS reverse proxy; do not expose the
 Vite development server or an unprotected analysis API to the public Internet.
 
@@ -365,6 +407,10 @@ Backend variables:
 - `ENVIRONMENT`: `development` or `production`
 - `ALLOWED_ORIGINS`: comma-separated CORS allowlist
 - `ADMIN_API_TOKEN`: protects administrative endpoints when set
+- `AEGIS_WORKSPACE_TOKENS`: server-configured bearer identities and product grants
+- `AEGIS_OIDC_ENABLED`: enables verified OIDC bearer identities; see the [required issuer and grant settings](docs/workspace-access.md)
+- `AEGIS_KB_RELEASE_DB`: opts into an approved knowledge-base release store
+- `AEGIS_RETRIEVAL_METRICS_DB`: optional bounded aggregate retrieval metrics; no prompt or document storage
 - `AEGIS_THREAT_ENABLE_TRANSFORMERS`: enables local transformer NER when its model is already cached
 - `AEGIS_THREAT_NER_MODEL`: Hugging Face model ID used for NER enrichment
 - `AEGIS_THREAT_LOCAL_SLM_MODEL`: locally available checkpoint for the review-only structured SLM
@@ -435,7 +481,7 @@ training reports make them reproducible.
 | `/analyze-code` | `POST` | Analyze supported source-code inputs |
 | `/analyze-with-llm` | `POST` | Add an external LLM challenger with retrieved context |
 | `/validate-api-key` | `POST` | Validate a provider API key |
-| `/health` | `GET` | Check API and local ML readiness |
+| `/health` | `GET` | Public liveness and application version; no model or workspace details |
 | `/feedback/findings` | `POST` | Record an analyst review decision without auto-approving it for training |
 | `/admin/retrieval-feedback/approve` | `POST` | Approve feedback and rebuild calibrated thresholds |
 | `/admin/retrieval-metrics` | `GET` | Inspect retrieval latency, fallback, cache, and query metrics |
@@ -493,6 +539,7 @@ npm run build     # production frontend bundle
 node --test scripts/model-workspace.test.mjs
 node --test scripts/release-presentation.test.mjs scripts/release-navigation.test.mjs
 node --test scripts/startup.test.mjs
+node --test scripts/*.test.mjs  # all frontend and launcher regressions
 ```
 
 Most of the suite's wall time is engine import rather than assertions, which is
@@ -542,6 +589,15 @@ The exporter rejects unnamed approval, and the trainer rejects unapproved record
 
 ## Report quality
 
+The [2.3.2 release notes](docs/releases/v2.3.2.md) summarize the current changes,
+verification results and remaining work. Temporary development plans and local
+evaluation output are not included in the release.
+
+Architecture images now have a side-by-side source review, flow clarification,
+and revision-aware corrections. Editable draw.io PNGs use their embedded model;
+plain images use local OCR and optional vision. See [diagram review](docs/diagram-intelligence.md)
+for setup, privacy controls and extraction checks.
+
 Reports have three publication states:
 
 - `ready`: final exports are available.
@@ -555,7 +611,13 @@ and a PDF page with no extractable text contributes nothing to the model, so
 left unread, and the report states them beside the scope counts they qualify.
 Findings from the pages that were read are still published.
 
-The dashboard supports finding states such as open, mitigated, accepted, and false positive. Mermaid labels and IDs are sanitized before rendering, and frontend response normalization is handled in [`src/utils/analysisMapper.js`](src/utils/analysisMapper.js).
+Governed findings start in Pending Review. Product-team decisions and remarks are
+stored against their report revision. Accepted Risk, Verified Fixed and False
+Positive require product-administrator approval. Acceptance also needs an owner
+and expiry; a verified fix needs an owner, passing verification records and
+acceptance criteria. Older reports retain their legacy
+review states. Mermaid labels and IDs are sanitized before rendering, and frontend
+response normalization is handled in [`src/utils/analysisMapper.js`](src/utils/analysisMapper.js).
 
 ### Known limitations
 
@@ -564,13 +626,22 @@ Treat this release as an assisted review tool, not a security sign-off engine.
 deployment was tested. "100% STRIDE assessed" is not complete threat coverage;
 check evidence resolution and the original documents as well.
 
-Product workspaces use local SQLite storage and installation-wide roles, not
-per-product tenant isolation or enterprise SSO. Protect and back up the database;
+Product workspaces use local SQLite storage. Explicit product grants and verified
+OIDC bearer tokens are supported; the browser does not yet provide an OIDC login
+redirect. Legacy unscoped tokens retain installation-wide access. See
+[workspace access](docs/workspace-access.md) before shared deployment.
+Protect and back up the database;
 it stores extracted source text and is not encrypted by this application. Cloud
 policy reasoning handles a bounded AWS IAM subset, not live permission testing.
 Synthetic tests check implementation behavior, not independent production
 accuracy. See [product workspaces](docs/product-workspaces.md) and
-[implementation boundaries](docs/reliability-implementation.md).
+[release scope](docs/releases/v2.3.2.md#scope-and-remaining-work).
+
+The bundled knowledge base is usable without an approved release database, but
+legacy rules still need further curation and independent review. AWS discovery
+currently covers EC2, RDS, Lambda and S3. Pattern, Jira and interchange APIs do
+not yet have complete browser management screens. Azure/GCP collection, browser
+OIDC login, SCIM and simultaneous diagram editing are not included.
 
 ## License
 

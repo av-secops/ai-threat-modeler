@@ -1,4 +1,6 @@
 # Aegis Threat 2.3.2: pip install -r requirements.txt from the repository root.
 # Python 3.10+; Python 3.12 recommended. Frontend packages: npm ci.
 # The backend manifest is the single source of Python runtime dependencies.
+# Optional AWS discovery: pip install -r backend/requirements-cloud.txt
+# Optional GPU training: pip install -r backend/requirements-training.txt
 -r backend/requirements.txt

@@ -1,4 +1,5 @@
 import io
+import hashlib
 import csv
 import json
 import os
@@ -68,6 +69,7 @@ TEXT_EXTENSIONS = {
     ".yml",
     ".tf",
     ".hcl",
+    ".dockerfile",
 }
 SUPPORTED_EXTENSIONS = TEXT_EXTENSIONS | {".pdf", ".docx"}
 MAX_DOCUMENT_BYTES = 8 * 1024 * 1024
@@ -517,10 +519,16 @@ def _flatten_structure(value, path: str = "$") -> List[str]:
 
 def _extract_text_from_bytes(filename: str, raw_bytes: bytes) -> Tuple[str, str, Dict[str, str]]:
     _, extension = os.path.splitext((filename or "").lower())
+    name = (filename or '').replace('\\', '/').rsplit('/', 1)[-1].lower()
+    if name == 'dockerfile' or name.startswith('dockerfile.'):
+        extension = '.dockerfile'
+    from .diagram_import import DIAGRAM_EXTENSIONS, extract_diagram
+    if extension in DIAGRAM_EXTENSIONS:
+        return extract_diagram(filename, raw_bytes)
     if extension not in SUPPORTED_EXTENSIONS:
         raise ValueError(
             f"Unsupported file type '{extension or 'unknown'}'. "
-            "Supported formats: txt, md, rst, csv, json, yaml, yml, tf, hcl, pdf, docx."
+            "Supported formats: txt, md, rst, csv, json, yaml, yml, tf, hcl, Dockerfile, pdf, docx."
         )
 
     if len(raw_bytes) > MAX_DOCUMENT_BYTES:
@@ -543,6 +551,7 @@ async def extract_documents(
     files: List[UploadFile],
     max_files: int = MAX_DOCUMENTS,
     max_total_bytes: int = MAX_TOTAL_BYTES,
+    diagram: bool = False,
 ) -> Tuple[str, List[Dict[str, str]]]:
     if not files:
         raise ValueError("At least one design document must be uploaded.")
@@ -554,10 +563,20 @@ async def extract_documents(
     extracted_sections: List[str] = []
     metadata: List[Dict[str, str]] = []
     total_bytes = 0
+    seen_artifacts = set()
+    seen_names = set()
 
     for file in files:
         filename = file.filename or "uploaded-document"
-        raw_bytes = await file.read()
+        raw_bytes = await file.read(MAX_DOCUMENT_BYTES + 1)
+        artifact_hash = hashlib.sha256(raw_bytes).hexdigest()
+        if artifact_hash in seen_artifacts:
+            continue
+        seen_artifacts.add(artifact_hash)
+        if filename in seen_names:
+            stem, suffix = os.path.splitext(filename)
+            filename = f'{stem}-{artifact_hash[:12]}{suffix}'
+        seen_names.add(filename)
         # Every document is held in memory and concatenated into one description,
         # so the batch needs a ceiling of its own, not only a per-file one.
         total_bytes += len(raw_bytes)
@@ -565,7 +584,12 @@ async def extract_documents(
             raise ValueError(
                 f"The submitted documents exceed the {max_total_bytes // (1024 * 1024)} MB total upload limit."
             )
-        extracted_text, extension, extraction_details = _extract_text_from_bytes(filename, raw_bytes)
+        from starlette.concurrency import run_in_threadpool
+        if diagram and filename.lower().endswith('.pdf'):
+            from .diagram_import import extract_pdf_diagram
+            extracted_text, extension, extraction_details = await run_in_threadpool(extract_pdf_diagram, filename, raw_bytes)
+        else:
+            extracted_text, extension, extraction_details = await run_in_threadpool(_extract_text_from_bytes, filename, raw_bytes)
         if not extracted_text:
             raise ValueError(f"File '{filename}' did not contain usable text.")
 
@@ -590,6 +614,7 @@ async def extract_documents(
                 "type": extension.lstrip("."),
                 "role": role,
                 "characters": str(len(extracted_text)),
+                "artifact_hash": artifact_hash,
                 **_source_characteristics(extracted_text),
                 **extraction_details,
             }

@@ -43,6 +43,7 @@ test('release navigation keeps additional applications inside the selected relea
     const settle = () => act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
     const render = async props => {
       if (root) await act(async () => root.unmount());
+      dom.window.history.replaceState(null, '', '/');
       root = createRoot(document.getElementById('root'));
       await act(async () => root.render(React.createElement(ProductsWorkspace, {
         initialLocation: { product_id: product.id, release_id: release.id }, ...props,
@@ -57,19 +58,21 @@ test('release navigation keeps additional applications inside the selected relea
       await render({ onStart: scope => { started = scope; } });
       assert.equal(document.querySelectorAll('table[aria-label="Release threat models"] tbody tr').length, 2);
       assert.equal(document.querySelector('input[name="model-scope"]'), null);
-      await click(button('Add threat model'));
+      await click(button('New threat model'));
       assert.equal(document.querySelectorAll('input[name="model-scope"]:checked').length, 0);
       await click(document.querySelector('input[value="application"]'));
-      const name = [...document.querySelectorAll('label')].find(node => node.textContent === 'Application name').querySelector('input');
+      const name = document.querySelector('input[aria-label="Application name"]');
       await act(async () => {
         Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value').set.call(name, 'Billing');
         name.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
       });
-      await click(button('Continue to threat model'));
+      await click(button('Continue to architecture'));
       assert.equal(started?.release_id, release.id);
       assert.equal(started?.product_id, product.id);
       assert.equal(started?.application_id, 'app-two');
       assert.equal(started?.application_name, 'Billing');
+      assert.equal(document.querySelector('table[aria-label="Release threat models"]'), null);
+      await click(button('Cancel'));
       assert.equal(document.querySelectorAll('table[aria-label="Release threat models"] tbody tr').length, 2);
       assert.equal(calls.some(call => call.method === 'PUT' || call.method === 'DELETE'), false);
     });
@@ -77,15 +80,15 @@ test('release navigation keeps additional applications inside the selected relea
     await t.test('report add-another shortcut preselects application but never reuses the old name', async () => {
       await render({ initialLocation: { product_id: product.id, release_id: release.id, newModelScope: 'application' } });
       assert.equal(document.querySelector('input[value="application"]').checked, true);
-      assert.equal(button('Continue to threat model').disabled, true);
+      assert.equal(button('Continue to architecture').disabled, true);
       await click(button('Cancel'));
-      assert.ok(button('Add threat model'));
+      assert.ok(button('New threat model'));
     });
 
     await t.test('opening an existing report carries release breadcrumbs and application identity', async () => {
       let opened;
       await render({ onOpen: row => { opened = row; } });
-      await click(button('Open Portal model'));
+      await click(button('View report: Portal model'));
       assert.equal(opened.productScope.product_id, product.id);
       assert.equal(opened.productScope.release_id, release.id);
       assert.equal(opened.productScope.application_name, 'Portal');
@@ -95,10 +98,10 @@ test('release navigation keeps additional applications inside the selected relea
     await t.test('back moves from release to product and then to the catalog', async () => {
       const locations = [];
       await render({ onLocationChange: location => locations.push(location) });
-      await click(button('Back'));
+      await click(button('Back to releases'));
       assert.ok(document.querySelector('table[aria-label="Product releases"]'));
       assert.deepEqual(locations.at(-1), { product_id: product.id });
-      await click(button('Back'));
+      await click(button('Back to products'));
       assert.equal(locations.at(-1), null);
       assert.ok(document.querySelector('input[aria-label="Search products"]'));
     });
@@ -106,7 +109,7 @@ test('release navigation keeps additional applications inside the selected relea
     await t.test('viewers cannot create another model', async () => {
       role = 'viewer';
       await render({});
-      assert.equal(button('Add threat model').disabled, true);
+      assert.equal(button('New threat model').disabled, true);
     });
   } finally {
     if (root) await act(async () => root.unmount());

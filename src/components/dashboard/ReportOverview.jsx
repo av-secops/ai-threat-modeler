@@ -3,7 +3,7 @@ import { SeverityBadge } from './InsightCards';
 import { affectedComponents } from './theme';
 
 export default function ReportOverview({ threats, reviewStates, onSelect, onOpenRegister, onOpenAssurance, evidenceRequests }) {
-    const actionable = threats.filter((threat) => threat.finding_type !== 'validation_question' && !['false_positive', 'mitigated', 'accepted'].includes(reviewStates[threat.id]));
+    const actionable = threats.filter((threat) => threat.finding_type !== 'validation_question' && !['false_positive', 'mitigated', 'accepted', 'verified_fixed'].includes(reviewStates[threat.id]));
     const requests = (evidenceRequests?.requests || []).slice(0, 3);
     return <div className="grid gap-8 py-6 lg:grid-cols-[minmax(0,1.8fr)_minmax(240px,1fr)]">
         <section className="min-w-0">
